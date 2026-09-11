@@ -1,0 +1,94 @@
+= Sungrow SH Hybrid Inverters
+
+Integration of the Sungrow SH series of three-phase hybrid inverters (SH5T to
+SH25T, e.g. SH20T; the SH-RT series uses the same protocol) as a fully
+controllable Energy Storage System, including the remote EMS interface for
+Virtual-Power-Plant operation.
+
+== Implemented Natures
+
+Ess (`Sungrow.SH.ESS`):
+
+- ManagedSymmetricEss
+- SymmetricEss
+- HybridEss
+- StartStoppable
+
+Charger (`Sungrow.SH.Charger`), one instance per MPPT port (a SH20T has three):
+
+- EssDcCharger
+
+Grid-Meter (`Sungrow.SH.Grid-Meter`):
+
+- ElectricityMeter
+
+== Remote control
+
+'EMS mode selection' (Holding-Register 13049) decides who dispatches the
+battery:
+
+|===
+|Control mode |EMS mode |Heartbeat |Remark
+
+|`INTERNAL`
+|0 - Self-consumption
+|no
+|The inverter dispatches itself; OpenEMS never writes a Set-Point.
+
+|`REMOTE_COMPULSORY`
+|2 - Compulsory
+|no
+|Verified in the field; recommended default for remote control.
+
+|`REMOTE_EXTERNAL_EMS`
+|3 - External EMS
+|yes
+|The inverter is fully scheduled by OpenEMS.
+
+|`REMOTE_VPP`
+|4 - VPP
+|yes
+|Same as External EMS, reported as VPP control.
+|===
+
+In every remote mode the Set-Point is applied as a command (Holding-Register
+13050: `0xAA` charge, `0xBB` discharge, `0xCC` stop) plus an unsigned power in
+[W] (Holding-Register 13051). The power refers to the battery, so
+`ApplyPowerHandler` subtracts the DC PV production from the AC Set-Point and
+clamps the result to the configured battery limits, which are additionally
+written to Holding-Registers 33046/33047.
+
+`External EMS` and `VPP` mode need a cyclic heartbeat (Holding-Register 13079);
+if it stops, the inverter returns to self-consumption mode on its own. The
+State-Machine writes it in every Cycle while running and explicitly resets the
+inverter to self-consumption mode when the ESS is stopped or in error state.
+
+== Sign conventions
+
+Older firmware reports 'Battery power' (13021) as an unsigned magnitude and
+encodes the direction in 'Power flow status' (13000, bit 1 = charging) and in
+the sign of 'Battery current' (13020). `BatteryPowerHandler` evaluates all three
+registers, so the DC discharge power is correct on old and new firmware.
+
+'Meter Active Power' (5600) already matches the OpenEMS convention: positive
+means buy-from-grid.
+
+== Modbus
+
+Modbus TCP on port 502 via WiNet-S/WiNet-S2 or the LAN port of the inverter, or
+Modbus RTU via RS485; Unit-ID 1 by default. Measurements are Input-Registers
+(FC4), settings are Holding-Registers (FC3 to read, FC16 to write).
+
+Two pitfalls:
+
+- **Addressing**: the addresses used here are protocol addresses. The Sungrow
+  protocol document counts from 1, so the address in the document is the
+  address used here plus one.
+- **Word order**: Sungrow transmits 32-bit values *low word first*, which is why
+  every `SignedDoublewordElement` and `UnsignedDoublewordElement` is declared
+  with `wordOrder(LSWMSW)`.
+
+Register addresses are taken from the Sungrow 'Open Communication Protocol of
+Residential Hybrid Inverter' V1.1.9. The device type code of a SH20T is 0xE26.
+
+https://github.com/OpenEMS/openems/tree/develop/io.openems.edge.sungrow[Source Code icon:github[]]
