@@ -1,0 +1,83 @@
+= SAJ CH2 Hybrid Inverters
+
+Integration of the SAJ CH2 commercial hybrid inverter as a fully controllable
+Energy Storage System, including the remote EMS interface for
+Virtual-Power-Plant operation. The CH2 is the power conversion system of the
+SAJ C&I storage products (CHS2 / CM2 all-in-one systems).
+
+== Implemented Natures
+
+Ess (`SAJ.CH2.ESS`):
+
+- ManagedSymmetricEss
+- SymmetricEss
+- HybridEss
+- StartStoppable
+
+Charger (`SAJ.CH2.Charger`), one instance per MPPT port (PV1-PV8):
+
+- EssDcCharger
+
+Grid-Meter (`SAJ.CH2.Grid-Meter`):
+
+- ElectricityMeter
+
+== Remote EMS control
+
+The CH2 provides a dedicated remote EMS interface. `EMSEnable` (0x8400) selects
+which Set-Point the inverter follows:
+
+|===
+|Control mode |EMSEnable |Set-Point register |Meaning
+
+|`INTERNAL`
+|0 - invalid
+|-
+|The inverter follows its own application mode; OpenEMS never writes.
+
+|`REMOTE_INVERTER`
+|1
+|`EMSINVPRef` (0x8402)
+|Target power of the AC side of the inverter, PV production included.
+
+|`REMOTE_BATTERY`
+|2
+|`EMSBATPRef` (0x8405)
+|Target power of the battery; the PV production is subtracted from the OpenEMS Set-Point.
+|===
+
+Both Set-Points are signed values in 0.01 % of the nominal power (10000 =
+100 %, range -110 % to +110 %); positive discharges to grid, negative charges
+the battery - the same sign convention OpenEMS uses. `ApplyPowerHandler`
+performs the conversion.
+
+`EMSKeepTime` (0x8401) is the watchdog of the remote session: if OpenEMS stops
+writing for longer than this time, the inverter falls back to its own
+application mode. The State-Machine writes it when the session is opened and
+hands control back (`EMSEnable` = 0) when the ESS is stopped or in error state.
+
+Export and import limits are available as `EMS_SELL_LIMIT` (0x8306) and
+`EMS_BUY_LIMIT` (0x8307), also in 0.01 % of the nominal power.
+
+== Sign conventions
+
+The CH2 reports the energy flow direction in dedicated registers rather than
+signing the power values. `SignedPower` applies the direction register:
+
+- battery: 0x7BEF (1 = discharge, 0 = idle, -1 = charge) to 0x7BFE
+- grid: 0x7BF0 (1 = sell to grid, 0 = idle, -1 = buy from grid) to 0x7C00
+
+For the grid meter the sign is inverted afterwards, because OpenEMS counts
+buy-from-grid as positive.
+
+== Modbus
+
+RS485 (Modbus RTU, 19200 or 9600 baud, 8N1, device address 1-247) or Ethernet
+(Modbus TCP, port 502, the inverter acts as server). All registers are read
+with FC3 and written with FC16.
+
+Register addresses are taken from 'Protocol for CH2 remote EMS control' of
+Guangzhou Sanjing Electric Co., Ltd. Monitoring registers live in 0x7B04-0x7C88,
+the remote EMS registers in 0x8306-0x8405.
+
+https://github.com/OpenEMS/openems/tree/develop/io.openems.edge.saj[Source Code icon:github[]]
