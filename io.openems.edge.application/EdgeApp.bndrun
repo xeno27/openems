@@ -151,6 +151,7 @@
 	bnd.identity;id='io.openems.edge.fenecon.pro',\
 	bnd.identity;id='io.openems.edge.fronius',\
 	bnd.identity;id='io.openems.edge.goodwe',\
+	bnd.identity;id='io.openems.edge.growatt',\
 	bnd.identity;id='io.openems.edge.heat.askoma',\
 	bnd.identity;id='io.openems.edge.heat.mypv',\
 	bnd.identity;id='io.openems.edge.huawei',\
@@ -359,6 +360,7 @@
 	io.openems.edge.fenecon.pro;version=snapshot,\
 	io.openems.edge.fronius;version=snapshot,\
 	io.openems.edge.goodwe;version=snapshot,\
+	io.openems.edge.growatt;version=snapshot,\
 	io.openems.edge.heat.api;version=snapshot,\
 	io.openems.edge.heat.askoma;version=snapshot,\
 	io.openems.edge.heat.mypv;version=snapshot,\

@@ -1,0 +1,295 @@
+package io.openems.edge.growatt.common;
+
+import io.openems.common.channel.AccessMode;
+import io.openems.common.channel.Level;
+import io.openems.common.channel.PersistencePriority;
+import io.openems.common.channel.Unit;
+import io.openems.common.types.OpenemsType;
+import io.openems.edge.common.channel.BooleanWriteChannel;
+import io.openems.edge.common.channel.Channel;
+import io.openems.edge.common.channel.Doc;
+import io.openems.edge.common.channel.EnumWriteChannel;
+import io.openems.edge.common.channel.IntegerReadChannel;
+import io.openems.edge.common.channel.IntegerWriteChannel;
+import io.openems.edge.common.channel.value.Value;
+import io.openems.edge.common.component.OpenemsComponent;
+import io.openems.edge.growatt.charger.GrowattCharger;
+import io.openems.edge.growatt.common.enums.BatteryStatus;
+import io.openems.edge.growatt.common.enums.BatteryType;
+import io.openems.edge.growatt.common.enums.InverterStatus;
+import io.openems.edge.growatt.common.enums.PriorityMode;
+import io.openems.edge.growatt.common.enums.SystemWorkMode;
+import io.openems.edge.growatt.ess.statemachine.StateMachine.State;
+
+/**
+ * Channels and helper methods that are common to all Growatt SPH Components.
+ */
+public interface GrowattSph extends OpenemsComponent {
+
+	public enum ChannelId implements io.openems.edge.common.channel.ChannelId {
+		/*
+		 * Input-Registers: inverter values.
+		 */
+		INVERTER_STATUS(Doc.of(InverterStatus.values()) //
+				.persistencePriority(PersistencePriority.HIGH)), //
+		PV_TOTAL_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT) //
+				.persistencePriority(PersistencePriority.HIGH)), //
+		AC_OUTPUT_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		GRID_FREQUENCY(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.MILLIHERTZ)), //
+		INVERTER_TEMPERATURE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.DEGREE_CELSIUS)), //
+		IPM_TEMPERATURE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.DEGREE_CELSIUS)), //
+		BOOST_TEMPERATURE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.DEGREE_CELSIUS)), //
+		ACTUAL_PRIORITY_MODE(Doc.of(PriorityMode.values())), //
+		BATTERY_TYPE(Doc.of(BatteryType.values())), //
+
+		/*
+		 * Input-Registers: storage values.
+		 */
+		SYSTEM_WORK_MODE(Doc.of(SystemWorkMode.values()) //
+				.persistencePriority(PersistencePriority.HIGH)), //
+		BATTERY_DISCHARGE_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		BATTERY_CHARGE_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		BATTERY_VOLTAGE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.MILLIVOLT)), //
+		BATTERY_TEMPERATURE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.DEGREE_CELSIUS)), //
+		BATTERY_STATUS(Doc.of(BatteryStatus.values())), //
+		P_AC_TO_USER_TOTAL(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		P_AC_TO_GRID_TOTAL(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		P_LOCAL_LOAD_TOTAL(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+
+		/*
+		 * Holding-Registers: remote control.
+		 */
+		POWER_ON_OFF(Doc.of(OpenemsType.BOOLEAN) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		ACTIVE_POWER_RATE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		REACTIVE_POWER_RATE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		EXPORT_LIMIT_ENABLE(Doc.of(OpenemsType.INTEGER) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		EXPORT_LIMIT_POWER_RATE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.THOUSANDTH) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		SET_PRIORITY_MODE(Doc.of(PriorityMode.values()) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		GRID_FIRST_DISCHARGE_POWER_RATE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		GRID_FIRST_STOP_SOC(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		GRID_FIRST_SLOT_START(Doc.of(OpenemsType.INTEGER) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		GRID_FIRST_SLOT_STOP(Doc.of(OpenemsType.INTEGER) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		GRID_FIRST_SLOT_ENABLED(Doc.of(OpenemsType.BOOLEAN) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		BATTERY_FIRST_CHARGE_POWER_RATE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		BATTERY_FIRST_STOP_SOC(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		BATTERY_FIRST_AC_CHARGE(Doc.of(OpenemsType.BOOLEAN) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		BATTERY_FIRST_SLOT_START(Doc.of(OpenemsType.INTEGER) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		BATTERY_FIRST_SLOT_STOP(Doc.of(OpenemsType.INTEGER) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		BATTERY_FIRST_SLOT_ENABLED(Doc.of(OpenemsType.BOOLEAN) //
+				.accessMode(AccessMode.READ_WRITE)), //
+
+		/*
+		 * State-Channels.
+		 */
+		STATE_MACHINE(Doc.of(State.values()) //
+				.text("Current State of State-Machine")), //
+		RUN_FAILED(Doc.of(Level.FAULT) //
+				.text("Running the Logic failed"));
+
+		private final Doc doc;
+
+		private ChannelId(Doc doc) {
+			this.doc = doc;
+		}
+
+		@Override
+		public Doc doc() {
+			return this.doc;
+		}
+	}
+
+	/**
+	 * Registers a {@link GrowattCharger} with this inverter. The PV production of
+	 * all registered Chargers is subtracted from the Active-Power Set-Point to get
+	 * the battery power.
+	 *
+	 * @param charger the {@link GrowattCharger}
+	 */
+	public void addCharger(GrowattCharger charger);
+
+	/**
+	 * Unregisters a {@link GrowattCharger} from this inverter.
+	 *
+	 * @param charger the {@link GrowattCharger}
+	 */
+	public void removeCharger(GrowattCharger charger);
+
+	/**
+	 * Gets the sum of the actual power of all registered {@link GrowattCharger}s.
+	 *
+	 * @return the PV production in [W]; null if no value is available
+	 */
+	public Integer calculatePvProduction();
+
+	/**
+	 * Gets the Channel for {@link ChannelId#SET_PRIORITY_MODE}.
+	 *
+	 * @return the Channel
+	 */
+	public default EnumWriteChannel getSetPriorityModeChannel() {
+		return this.channel(ChannelId.SET_PRIORITY_MODE);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#GRID_FIRST_DISCHARGE_POWER_RATE}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerWriteChannel getGridFirstDischargePowerRateChannel() {
+		return this.channel(ChannelId.GRID_FIRST_DISCHARGE_POWER_RATE);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#BATTERY_FIRST_CHARGE_POWER_RATE}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerWriteChannel getBatteryFirstChargePowerRateChannel() {
+		return this.channel(ChannelId.BATTERY_FIRST_CHARGE_POWER_RATE);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#BATTERY_FIRST_AC_CHARGE}.
+	 *
+	 * @return the Channel
+	 */
+	public default BooleanWriteChannel getBatteryFirstAcChargeChannel() {
+		return this.channel(ChannelId.BATTERY_FIRST_AC_CHARGE);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#GRID_FIRST_SLOT_START}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerWriteChannel getGridFirstSlotStartChannel() {
+		return this.channel(ChannelId.GRID_FIRST_SLOT_START);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#GRID_FIRST_SLOT_STOP}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerWriteChannel getGridFirstSlotStopChannel() {
+		return this.channel(ChannelId.GRID_FIRST_SLOT_STOP);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#GRID_FIRST_SLOT_ENABLED}.
+	 *
+	 * @return the Channel
+	 */
+	public default BooleanWriteChannel getGridFirstSlotEnabledChannel() {
+		return this.channel(ChannelId.GRID_FIRST_SLOT_ENABLED);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#BATTERY_FIRST_SLOT_START}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerWriteChannel getBatteryFirstSlotStartChannel() {
+		return this.channel(ChannelId.BATTERY_FIRST_SLOT_START);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#BATTERY_FIRST_SLOT_STOP}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerWriteChannel getBatteryFirstSlotStopChannel() {
+		return this.channel(ChannelId.BATTERY_FIRST_SLOT_STOP);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#BATTERY_FIRST_SLOT_ENABLED}.
+	 *
+	 * @return the Channel
+	 */
+	public default BooleanWriteChannel getBatteryFirstSlotEnabledChannel() {
+		return this.channel(ChannelId.BATTERY_FIRST_SLOT_ENABLED);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#POWER_ON_OFF}.
+	 *
+	 * @return the Channel
+	 */
+	public default BooleanWriteChannel getPowerOnOffChannel() {
+		return this.channel(ChannelId.POWER_ON_OFF);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#INVERTER_STATUS}.
+	 *
+	 * @return the Channel
+	 */
+	public default Channel<InverterStatus> getInverterStatusChannel() {
+		return this.channel(ChannelId.INVERTER_STATUS);
+	}
+
+	/**
+	 * Gets the {@link InverterStatus}. See
+	 * {@link ChannelId#INVERTER_STATUS}.
+	 *
+	 * @return the {@link InverterStatus}
+	 */
+	public default InverterStatus getInverterStatus() {
+		return this.getInverterStatusChannel().value().asEnum();
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#BATTERY_VOLTAGE}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerReadChannel getBatteryVoltageChannel() {
+		return this.channel(ChannelId.BATTERY_VOLTAGE);
+	}
+
+	/**
+	 * Gets the Battery Voltage in [mV]. See {@link ChannelId#BATTERY_VOLTAGE}.
+	 *
+	 * @return the Channel {@link Value}
+	 */
+	public default Value<Integer> getBatteryVoltage() {
+		return this.getBatteryVoltageChannel().value();
+	}
+}
