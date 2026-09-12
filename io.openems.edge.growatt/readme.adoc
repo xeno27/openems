@@ -146,13 +146,23 @@ writes. Three mechanisms keep the number of writes low:
 
 == Modbus
 
-RS485 / Modbus RTU with 9600 baud, 8N1, Unit-ID 1 by default; a Modbus-TCP
-gateway works as well. Measurements are Input-Registers (FC4), settings are
-Holding-Registers (FC3 to read, FC16 to write). 32-bit values are transmitted
-high-word first.
+RS485 / Modbus RTU with 9600 baud, 8N1, Unit-ID 1 by default. Measurements are
+Input-Registers (FC4), settings are Holding-Registers (FC3 to read, FC16 to
+write). 32-bit values are transmitted high-word first.
+
+The VPP register bank is not a separate interface: both the storage registers
+(0-124 / 1000-1124) and the VPP registers (30000-32099) are served on the same
+RS485 connection. The VPP protocol even defines the RS485 parameters itself, in
+registers 30112 (device address) and 30113 (baud rate). Whether the VPP bank
+answers is a question of firmware, not of wiring.
+
+Connect directly to RS485. A ShineMaster datalogger can act as a Modbus-TCP to
+Modbus-RTU gateway, but Growatt requires more than five seconds between two
+commands on that path, which rules it out for cycle-synchronous control.
 
 Only one Modbus master is allowed on the RS485 bus - a ShineWiFi/Shine stick
-that polls the same bus in parallel causes CRC errors and lost responses.
+that polls the same bus in parallel causes CRC errors and lost responses, which
+can also show up as registers that read zero.
 
 === Source of the register addresses
 
