@@ -23,7 +23,73 @@ Grid-Meter (`Growatt.SPH.Grid-Meter`):
 
 == Remote control
 
-The SPH inverters have no register for an absolute power Set-Point. The energy
+Two control paths are available; the `Control mode` configuration selects
+between them.
+
+=== VPP protocol (recommended)
+
+`Control mode` = `REMOTE_VPP` uses the dedicated Growatt VPP protocol (register
+bank 30000-32099, GROWATT VPP COMMUNICATION PROTOCOL OF INVERTER V2.01). It
+provides a real remote Set-Point:
+
+|===
+|Register |Name |Meaning
+
+|30407
+|Remote power control enable
+|1 overrides the time-slot schedule and self-consumption
+
+|30408
+|Remote power control charging time
+|0 = until revoked; written as 0
+
+|30409
+|Remote charge and discharge power
+|Signed percentage, *positive is charge*, negative is discharge
+
+|30474
+|Actual control value
+|Read-back of the value the inverter actually applies
+|===
+
+These three registers are explicitly *not* stored in non-volatile memory, so
+they are written in every Cycle without quantization or throttling. Note the
+inverted sign convention: OpenEMS counts positive as discharge, Growatt counts
+positive as charge.
+
+The percentage refers to the DC side of the battery. The reference power is the
+`BDC rated power` configuration; with the default 0 it is read from the
+inverter (register 30026).
+
+`Control authority` (30100) is enabled once, and the watchdog registers
+30203/30204 (`EMS failure time`) make the inverter fall back to its own
+schedule if OpenEMS stops writing.
+
+The VPP register bank additionally provides much better measurements, which are
+preferred automatically when available: AC power (31100), battery power as a
+single signed value (31200), *dynamic battery power limits from the BMS*
+(31210/31212), SOC/SOH, fault and alarm codes with sub codes.
+
+==== Availability and fallback
+
+The VPP register bank only exists on firmware that implements the protocol. The
+Component reads register 30099 (VPP protocol version) at startup; the probe
+gives up after five consecutive errors and is restarted whenever the Modbus
+connection recovers. On a device without VPP support this costs a handful of
+failed reads at startup.
+
+If `REMOTE_VPP` is configured but the inverter does not answer, the
+`VPP_NOT_AVAILABLE` warning is raised and the Component falls back to the
+priority and time-slot control described below.
+
+Supported models per the protocol document (Table 3-1) include SPH 3000-6000TL
+BL (DTC 3502) and SPH 4000-10000TL3 BH-UP (DTC 3601), i.e. both SPH4600
+variants.
+
+=== Priority and time-slot control (legacy)
+
+`Control mode` = `REMOTE` uses the storage registers of the Growatt Inverter
+Modbus RTU Protocol_II. The SPH inverters have no register for an absolute power Set-Point. The energy
 flow is controlled by the 'Priority Mode' in combination with a power rate in
 percent of the nominal battery power:
 
@@ -48,10 +114,10 @@ reserved by this implementation and is set to 00:00-23:59, so that the priority
 mode is effective the whole day. Time-slots 2 and 3 stay available for a
 schedule that is configured via ShinePhone.
 
-Remote control is only active if `Control mode` is set to `REMOTE`; with
-`INTERNAL` (the default) OpenEMS never writes a Set-Point.
+With `Control mode` = `INTERNAL` (the default) OpenEMS never writes a
+Set-Point.
 
-=== Protecting the non-volatile memory
+==== Protecting the non-volatile memory
 
 Growatt stores these settings in non-volatile memory, which wears out on cyclic
 writes. Three mechanisms keep the number of writes low:
@@ -73,6 +139,9 @@ Only one Modbus master is allowed on the RS485 bus - a ShineWiFi/Shine stick
 that polls the same bus in parallel causes CRC errors and lost responses.
 
 === Source of the register addresses
+
+The VPP register bank (30000-32099) is taken from GROWATT VPP COMMUNICATION
+PROTOCOL OF INVERTER V2.01 (2024-09-20).
 
 The following core registers are verified in the field (evcc template
 `growatt-hybrid`): Input 1, 91, 1009, 1011, 1014, 1021, 1029, 1046, 1054 and

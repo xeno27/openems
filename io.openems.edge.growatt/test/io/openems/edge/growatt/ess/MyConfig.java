@@ -22,6 +22,8 @@ public class MyConfig extends AbstractComponentConfig implements Config {
 		private int maxSoc = 100;
 		private int powerRateStep = 5;
 		private int minimumWriteInterval = 30;
+		private int bdcRatedPower = 0;
+		private int emsFailureTime = 60;
 
 		private Builder() {
 		}
@@ -88,6 +90,16 @@ public class MyConfig extends AbstractComponentConfig implements Config {
 
 		public Builder setMinimumWriteInterval(int minimumWriteInterval) {
 			this.minimumWriteInterval = minimumWriteInterval;
+			return this;
+		}
+
+		public Builder setBdcRatedPower(int bdcRatedPower) {
+			this.bdcRatedPower = bdcRatedPower;
+			return this;
+		}
+
+		public Builder setEmsFailureTime(int emsFailureTime) {
+			this.emsFailureTime = emsFailureTime;
 			return this;
 		}
 
@@ -175,5 +187,15 @@ public class MyConfig extends AbstractComponentConfig implements Config {
 	@Override
 	public int minimumWriteInterval() {
 		return this.builder.minimumWriteInterval;
+	}
+
+	@Override
+	public int bdcRatedPower() {
+		return this.builder.bdcRatedPower;
+	}
+
+	@Override
+	public int emsFailureTime() {
+		return this.builder.emsFailureTime;
 	}
 }

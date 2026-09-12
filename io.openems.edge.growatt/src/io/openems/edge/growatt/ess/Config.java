@@ -45,6 +45,12 @@ import io.openems.edge.growatt.common.enums.ControlMode;
 	@AttributeDefinition(name = "Maximum State-of-Charge [%]", description = "Above this State-of-Charge no charge power is allowed.")
 	int maxSoc() default 100;
 
+	@AttributeDefinition(name = "BDC rated power [W]", description = "Reference power for the VPP remote power percentage. 0 reads the value from the inverter (VPP register 30026).")
+	int bdcRatedPower() default 0;
+
+	@AttributeDefinition(name = "EMS failure time [s]", description = "VPP watchdog (register 30203/30204): time without EMS communication until the inverter falls back to its own schedule. 0 disables the watchdog.")
+	int emsFailureTime() default 60;
+
 	@AttributeDefinition(name = "Power rate step [%]", description = "Quantization of the calculated power rate. Bigger steps cause fewer writes to the non-volatile memory of the inverter.")
 	int powerRateStep() default 5;
 

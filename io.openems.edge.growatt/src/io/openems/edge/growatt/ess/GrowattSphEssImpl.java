@@ -4,6 +4,9 @@ import static io.openems.common.utils.IntUtils.sumInteger;
 import static io.openems.edge.bridge.modbus.api.ElementToChannelConverter.SCALE_FACTOR_1;
 import static io.openems.edge.bridge.modbus.api.ElementToChannelConverter.SCALE_FACTOR_2;
 import static io.openems.edge.bridge.modbus.api.ElementToChannelConverter.SCALE_FACTOR_MINUS_1;
+import static io.openems.edge.bridge.modbus.api.ModbusUtils.abortAfterNthErrors;
+import static io.openems.edge.bridge.modbus.api.ModbusUtils.readElementsUntil;
+import static io.openems.edge.bridge.modbus.api.ModbusUtils.restartAfterChannelChange;
 import static io.openems.edge.common.channel.ChannelUtils.setValue;
 import static io.openems.edge.common.channel.ChannelUtils.setWriteValueIfNotRead;
 import static io.openems.edge.common.type.TypeUtils.subtract;
@@ -16,6 +19,7 @@ import static org.osgi.service.component.annotations.ReferencePolicyOption.GREED
 import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.osgi.service.cm.ConfigurationAdmin;
@@ -32,6 +36,8 @@ import org.osgi.service.metatype.annotations.Designate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.annotations.VisibleForTesting;
+
 import io.openems.common.channel.AccessMode;
 import io.openems.common.exceptions.OpenemsError.OpenemsNamedException;
 import io.openems.edge.bridge.modbus.api.AbstractOpenemsModbusComponent;
@@ -39,11 +45,14 @@ import io.openems.edge.bridge.modbus.api.BridgeModbus;
 import io.openems.edge.bridge.modbus.api.ModbusComponent;
 import io.openems.edge.bridge.modbus.api.ModbusProtocol;
 import io.openems.edge.bridge.modbus.api.element.DummyRegisterElement;
+import io.openems.edge.bridge.modbus.api.element.SignedDoublewordElement;
+import io.openems.edge.bridge.modbus.api.element.SignedWordElement;
 import io.openems.edge.bridge.modbus.api.element.UnsignedDoublewordElement;
 import io.openems.edge.bridge.modbus.api.element.UnsignedWordElement;
 import io.openems.edge.bridge.modbus.api.task.FC16WriteRegistersTask;
 import io.openems.edge.bridge.modbus.api.task.FC3ReadRegistersTask;
 import io.openems.edge.bridge.modbus.api.task.FC4ReadInputRegistersTask;
+import io.openems.edge.bridge.modbus.api.task.Task;
 import io.openems.edge.common.channel.EnumReadChannel;
 import io.openems.edge.common.channel.IntegerReadChannel;
 import io.openems.edge.common.component.ComponentManager;
@@ -64,6 +73,9 @@ import io.openems.edge.growatt.charger.GrowattCharger;
 import io.openems.edge.growatt.common.AllowedPowerHandler;
 import io.openems.edge.growatt.common.ApplyPowerHandler;
 import io.openems.edge.growatt.common.GrowattSph;
+import io.openems.edge.growatt.common.VppAllowedPowerHandler;
+import io.openems.edge.growatt.common.VppApplyPowerHandler;
+import io.openems.edge.growatt.common.VppPowerHandler;
 import io.openems.edge.growatt.common.WriteThrottle;
 import io.openems.edge.growatt.common.enums.ControlMode;
 import io.openems.edge.growatt.common.enums.SystemWorkMode;
@@ -102,6 +114,16 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	private static final int SLOT_START = 0x0000;
 	private static final int SLOT_STOP = 0x173B;
 
+	/**
+	 * Number of failed reads on the VPP register bank until the probe gives up.
+	 */
+	private static final int VPP_PROBE_ATTEMPTS = 5;
+
+	/**
+	 * 'Remote power control charging time' 0 means: control until revoked.
+	 */
+	private static final int VPP_UNLIMITED_DURATION = 0;
+
 	private final Logger log = LoggerFactory.getLogger(GrowattSphEssImpl.class);
 	private final StateMachine stateMachine = new StateMachine(State.UNDEFINED);
 	private final AtomicReference<StartStop> startStopTarget = new AtomicReference<>(StartStop.UNDEFINED);
@@ -130,8 +152,11 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 		super.setModbus(modbus);
 	}
 
+	private final AtomicBoolean vppAvailable = new AtomicBoolean(false);
+
 	private Config config;
 	private WriteThrottle writeThrottle;
+	private ModbusProtocol modbusProtocol;
 
 	public GrowattSphEssImpl() {
 		super(//
@@ -166,7 +191,7 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 
 	@Override
 	protected ModbusProtocol defineModbusProtocol() {
-		return new ModbusProtocol(this, //
+		this.modbusProtocol = new ModbusProtocol(this, //
 				/*
 				 * Input-Registers: inverter and PV values.
 				 */
@@ -300,6 +325,169 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 						m(GrowattSph.ChannelId.BATTERY_FIRST_SLOT_STOP, new UnsignedWordElement(1101)), //
 						m(GrowattSph.ChannelId.BATTERY_FIRST_SLOT_ENABLED, new UnsignedWordElement(1102))) //
 		);
+
+		/*
+		 * The VPP register bank only exists on firmware that implements the Growatt
+		 * VPP protocol. Read the protocol version; if the inverter answers, add the
+		 * VPP Tasks, otherwise give up after a few errors and keep the priority and
+		 * time-slot control. The probe is restarted whenever the Modbus connection
+		 * recovers, so a device that was temporarily unreachable is not permanently
+		 * treated as 'without VPP'.
+		 */
+		readElementsUntil(this.modbusProtocol, abortAfterNthErrors(VPP_PROBE_ATTEMPTS),
+				restartAfterChannelChange(this.getModbusCommunicationFailedChannel()),
+				executeStateConsumer -> new FC3ReadRegistersTask(executeStateConsumer, 30099, Priority.LOW,
+						m(GrowattSph.ChannelId.VPP_PROTOCOL_VERSION, new UnsignedWordElement(30099)) //
+								.onUpdateCallback(this::onVppProbeResult)));
+
+		return this.modbusProtocol;
+	}
+
+	/**
+	 * Evaluates the answer of the VPP probe and adds the VPP Tasks on success.
+	 *
+	 * @param protocolVersion the value of Holding-Register 30099; null if the
+	 *                        inverter did not answer
+	 */
+	private synchronized void onVppProbeResult(Object protocolVersion) {
+		if (protocolVersion == null) {
+			this.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE).setNextValue(this.config.controlMode().isVpp());
+			return;
+		}
+		this.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE).setNextValue(false);
+		if (this.vppAvailable.getAndSet(true)) {
+			// Tasks have been added before
+			return;
+		}
+		this.modbusProtocol.addTasks(this.createVppTasks());
+	}
+
+	/**
+	 * Creates the Modbus Tasks of the Growatt VPP protocol (register bank
+	 * 30000-32099).
+	 *
+	 * <p>
+	 * These Tasks are only added if the inverter answered on the VPP register
+	 * bank, see {@link #defineModbusProtocol()}.
+	 *
+	 * @return the {@link Task}s
+	 */
+	private Task[] createVppTasks() {
+		return new Task[] { //
+				/*
+				 * Hold-Registers: device information.
+				 */
+				new FC3ReadRegistersTask(30000, Priority.LOW, //
+						m(GrowattSph.ChannelId.VPP_DEVICE_TYPE_CODE, new UnsignedWordElement(30000))), //
+
+				new FC3ReadRegistersTask(30016, Priority.LOW, //
+						m(GrowattSph.ChannelId.VPP_RATED_POWER, new UnsignedDoublewordElement(30016),
+								SCALE_FACTOR_MINUS_1), //
+						m(GrowattSph.ChannelId.VPP_MAX_ACTIVE_POWER, new UnsignedDoublewordElement(30018),
+								SCALE_FACTOR_MINUS_1), //
+						new DummyRegisterElement(30020, 30025), //
+						m(GrowattSph.ChannelId.VPP_BDC_RATED_POWER, new UnsignedDoublewordElement(30026),
+								SCALE_FACTOR_MINUS_1)), //
+
+				/*
+				 * Hold-Registers: remote control. Read back, so that the settings that are
+				 * stored in non-volatile memory are only written when they actually change.
+				 */
+				new FC3ReadRegistersTask(30100, Priority.LOW, //
+						m(GrowattSph.ChannelId.VPP_CONTROL_AUTHORITY, new UnsignedWordElement(30100))), //
+
+				new FC3ReadRegistersTask(30203, Priority.LOW, //
+						m(GrowattSph.ChannelId.VPP_EMS_FAILURE_TIME, new UnsignedWordElement(30203)), //
+						m(GrowattSph.ChannelId.VPP_EMS_FAILURE_ENABLE, new UnsignedWordElement(30204))), //
+
+				new FC3ReadRegistersTask(30404, Priority.LOW, //
+						m(GrowattSph.ChannelId.VPP_CHARGE_CUT_OFF_SOC, new UnsignedWordElement(30404)), //
+						m(GrowattSph.ChannelId.VPP_DISCHARGE_CUT_OFF_SOC, new UnsignedWordElement(30405))), //
+
+				new FC3ReadRegistersTask(30407, Priority.HIGH, //
+						m(GrowattSph.ChannelId.VPP_REMOTE_POWER_ENABLE, new UnsignedWordElement(30407)), //
+						m(GrowattSph.ChannelId.VPP_REMOTE_POWER_DURATION, new UnsignedWordElement(30408)), //
+						m(GrowattSph.ChannelId.VPP_REMOTE_POWER, new SignedWordElement(30409))), //
+
+				new FC3ReadRegistersTask(30474, Priority.HIGH, //
+						m(GrowattSph.ChannelId.VPP_ACTUAL_CONTROL_POWER, new SignedWordElement(30474))), //
+
+				/*
+				 * Hold-Registers: write.
+				 */
+				new FC16WriteRegistersTask(30100, //
+						m(GrowattSph.ChannelId.VPP_CONTROL_AUTHORITY, new UnsignedWordElement(30100))), //
+
+				new FC16WriteRegistersTask(30203, //
+						m(GrowattSph.ChannelId.VPP_EMS_FAILURE_TIME, new UnsignedWordElement(30203)), //
+						m(GrowattSph.ChannelId.VPP_EMS_FAILURE_ENABLE, new UnsignedWordElement(30204))), //
+
+				new FC16WriteRegistersTask(30404, //
+						m(GrowattSph.ChannelId.VPP_CHARGE_CUT_OFF_SOC, new UnsignedWordElement(30404)), //
+						m(GrowattSph.ChannelId.VPP_DISCHARGE_CUT_OFF_SOC, new UnsignedWordElement(30405))), //
+
+				new FC16WriteRegistersTask(30407, //
+						m(GrowattSph.ChannelId.VPP_REMOTE_POWER_ENABLE, new UnsignedWordElement(30407)), //
+						m(GrowattSph.ChannelId.VPP_REMOTE_POWER_DURATION, new UnsignedWordElement(30408)), //
+						m(GrowattSph.ChannelId.VPP_REMOTE_POWER, new SignedWordElement(30409))), //
+
+				/*
+				 * Input-Registers: working status.
+				 */
+				new FC4ReadInputRegistersTask(31000, Priority.HIGH, //
+						m(GrowattSph.ChannelId.VPP_WORKING_STATE, new UnsignedWordElement(31000)), //
+						m(GrowattSph.ChannelId.VPP_BATTERY_WORKING_STATE, new UnsignedWordElement(31001)), //
+						m(GrowattSph.ChannelId.VPP_PRIORITY, new UnsignedWordElement(31002)), //
+						new DummyRegisterElement(31003, 31004), //
+						m(GrowattSph.ChannelId.VPP_FAULT_CODE, new UnsignedWordElement(31005)), //
+						m(GrowattSph.ChannelId.VPP_FAULT_SUB_CODE, new UnsignedWordElement(31006)), //
+						m(GrowattSph.ChannelId.VPP_ALARM_CODE, new UnsignedWordElement(31007)), //
+						m(GrowattSph.ChannelId.VPP_ALARM_SUB_CODE, new UnsignedWordElement(31008))), //
+
+				new FC4ReadInputRegistersTask(31058, Priority.HIGH, //
+						m(GrowattSph.ChannelId.VPP_PV_POWER, new SignedDoublewordElement(31058),
+								SCALE_FACTOR_MINUS_1)), //
+
+				/*
+				 * Input-Registers: AC information.
+				 */
+				new FC4ReadInputRegistersTask(31100, Priority.HIGH, //
+						m(GrowattSph.ChannelId.VPP_AC_ACTIVE_POWER, new SignedDoublewordElement(31100),
+								SCALE_FACTOR_MINUS_1), //
+						m(GrowattSph.ChannelId.VPP_AC_REACTIVE_POWER, new SignedDoublewordElement(31102),
+								SCALE_FACTOR_MINUS_1)), //
+
+				new FC4ReadInputRegistersTask(31114, Priority.LOW, //
+						m(GrowattSph.ChannelId.VPP_INVERTER_TEMPERATURE, new SignedWordElement(31114),
+								SCALE_FACTOR_MINUS_1)), //
+
+				/*
+				 * Input-Registers: battery information.
+				 */
+				new FC4ReadInputRegistersTask(31200, Priority.HIGH, //
+						m(GrowattSph.ChannelId.VPP_BATTERY_POWER, new SignedDoublewordElement(31200),
+								SCALE_FACTOR_MINUS_1), //
+						new DummyRegisterElement(31202, 31203), //
+						m(HybridEss.ChannelId.DC_CHARGE_ENERGY, new UnsignedDoublewordElement(31204),
+								SCALE_FACTOR_2), //
+						new DummyRegisterElement(31206, 31207), //
+						m(HybridEss.ChannelId.DC_DISCHARGE_ENERGY, new UnsignedDoublewordElement(31208),
+								SCALE_FACTOR_2), //
+						m(GrowattSph.ChannelId.VPP_BATTERY_MAX_CHARGE_POWER,
+								new UnsignedDoublewordElement(31210), SCALE_FACTOR_MINUS_1), //
+						m(GrowattSph.ChannelId.VPP_BATTERY_MAX_DISCHARGE_POWER,
+								new UnsignedDoublewordElement(31212), SCALE_FACTOR_MINUS_1), //
+						m(GrowattSph.ChannelId.VPP_BATTERY_VOLTAGE, new SignedWordElement(31214),
+								SCALE_FACTOR_2), //
+						m(GrowattSph.ChannelId.VPP_BATTERY_CURRENT, new SignedDoublewordElement(31215),
+								SCALE_FACTOR_2), //
+						m(SymmetricEss.ChannelId.SOC, new UnsignedWordElement(31217)), //
+						m(GrowattSph.ChannelId.VPP_BATTERY_STATE_OF_HEALTH, new UnsignedWordElement(31218))), //
+
+				new FC4ReadInputRegistersTask(31223, Priority.LOW, //
+						m(GrowattSph.ChannelId.VPP_BATTERY_TEMPERATURE, new SignedWordElement(31223),
+								SCALE_FACTOR_MINUS_1)) //
+		};
 	}
 
 	@Override
@@ -323,10 +511,19 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	 */
 	private void updatePowerAndEnergyChannels() {
 		final var pvProduction = this.calculatePvProduction();
-		final Integer dcDischargePower = subtract(//
-				this.<IntegerReadChannel>channel(GrowattSph.ChannelId.BATTERY_DISCHARGE_POWER).getNextValue().get(), //
-				this.<IntegerReadChannel>channel(GrowattSph.ChannelId.BATTERY_CHARGE_POWER).getNextValue().get());
-		final var acActivePower = sumInteger(pvProduction, dcDischargePower);
+		final var vppBatteryPower = this.<IntegerReadChannel>channel(GrowattSph.ChannelId.VPP_BATTERY_POWER)
+				.getNextValue().get();
+		final Integer dcDischargePower = vppBatteryPower != null //
+				// The VPP register bank reports the battery power in a single register
+				? VppPowerHandler.toDcDischargePower(vppBatteryPower)
+				: subtract(//
+						this.<IntegerReadChannel>channel(GrowattSph.ChannelId.BATTERY_DISCHARGE_POWER).getNextValue()
+								.get(), //
+						this.<IntegerReadChannel>channel(GrowattSph.ChannelId.BATTERY_CHARGE_POWER).getNextValue()
+								.get());
+		final var acActivePower = VppPowerHandler.selectAcActivePower(//
+				this.<IntegerReadChannel>channel(GrowattSph.ChannelId.VPP_AC_ACTIVE_POWER).getNextValue().get(), //
+				pvProduction, dcDischargePower);
 
 		this._setDcDischargePower(dcDischargePower);
 		this._setActivePower(acActivePower);
@@ -349,10 +546,24 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	 * Publishes the allowed charge and discharge power for the Power solver.
 	 */
 	private void updateAllowedPowerChannels() {
-		var allowed = AllowedPowerHandler.calculate(this.getSoc().get(), this.config.minSoc(), this.config.maxSoc(),
-				this.config.maxBatteryChargePower(), this.config.maxBatteryDischargePower());
+		final var allowed = this.vppAvailable.get() //
+				// The VPP register bank reports the dynamic limits of the battery
+				? VppAllowedPowerHandler.calculate(this.getSoc().get(), this.config.minSoc(), this.config.maxSoc(), //
+						this.<IntegerReadChannel>channel(GrowattSph.ChannelId.VPP_BATTERY_MAX_CHARGE_POWER)
+								.getNextValue().get(), //
+						this.<IntegerReadChannel>channel(GrowattSph.ChannelId.VPP_BATTERY_MAX_DISCHARGE_POWER)
+								.getNextValue().get(), //
+						this.config.maxBatteryChargePower(), this.config.maxBatteryDischargePower())
+				: toVppResult(AllowedPowerHandler.calculate(this.getSoc().get(), this.config.minSoc(),
+						this.config.maxSoc(), this.config.maxBatteryChargePower(),
+						this.config.maxBatteryDischargePower()));
+
 		setValue(this, ManagedSymmetricEss.ChannelId.ALLOWED_CHARGE_POWER, allowed.allowedChargePower());
 		setValue(this, ManagedSymmetricEss.ChannelId.ALLOWED_DISCHARGE_POWER, allowed.allowedDischargePower());
+	}
+
+	private static VppAllowedPowerHandler.Result toVppResult(AllowedPowerHandler.Result result) {
+		return new VppAllowedPowerHandler.Result(result.allowedChargePower(), result.allowedDischargePower());
 	}
 
 	/**
@@ -372,16 +583,96 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 
 	@Override
 	public void applyPower(int activePower, int reactivePower) throws OpenemsNamedException {
-		if (this.config.controlMode() == ControlMode.INTERNAL) {
+		if (!this.config.controlMode().isRemote()) {
 			// The inverter follows its own schedule
 			return;
 		}
-		var result = ApplyPowerHandler.calculate(activePower, //
-				this.calculatePvProduction() == null ? 0 : this.calculatePvProduction(), //
-				this.config.maxBatteryChargePower(), this.config.maxBatteryDischargePower(),
-				this.config.powerRateStep());
+		final var pvProduction = this.calculatePvProduction();
+		final var pv = pvProduction == null ? 0 : pvProduction;
 
-		this.applySetPoint(result);
+		if (this.config.controlMode().isVpp() && this.vppAvailable.get()) {
+			this.applyVppSetPoint(VppApplyPowerHandler.calculate(activePower, pv, this.getBdcRatedPower()));
+			return;
+		}
+		this.applySetPoint(ApplyPowerHandler.calculate(activePower, pv, //
+				this.config.maxBatteryChargePower(), this.config.maxBatteryDischargePower(),
+				this.config.powerRateStep()));
+	}
+
+	/**
+	 * Gets the reference power for the VPP remote power percentage.
+	 *
+	 * <p>
+	 * The configured value takes precedence; if it is zero, the rated
+	 * charge/discharge power of the battery DC/DC converter that the inverter
+	 * reports in Holding-Register 30026 is used.
+	 *
+	 * @return the reference power in [W]
+	 */
+	protected int getBdcRatedPower() {
+		if (this.config.bdcRatedPower() > 0) {
+			return this.config.bdcRatedPower();
+		}
+		var reported = this.<IntegerReadChannel>channel(GrowattSph.ChannelId.VPP_BDC_RATED_POWER).getNextValue().get();
+		if (reported != null && reported > 0) {
+			return reported;
+		}
+		return this.config.maxBatteryDischargePower();
+	}
+
+	/**
+	 * Writes the calculated Set-Point through the VPP register bank.
+	 *
+	 * <p>
+	 * 'Remote power control enable' (30407), 'Remote power control charging time'
+	 * (30408) and 'Remote charge and discharge power' (30409) are explicitly not
+	 * stored in non-volatile memory, so they are written in every Cycle without a
+	 * throttle.
+	 *
+	 * @param result the {@link VppApplyPowerHandler.Result}
+	 * @throws OpenemsNamedException on error
+	 */
+	private void applyVppSetPoint(VppApplyPowerHandler.Result result) throws OpenemsNamedException {
+		// Stored in non-volatile memory: only write on change
+		setWriteValueIfNotRead(this.getVppControlAuthorityChannel(), true);
+		setWriteValueIfNotRead(this.getVppEmsFailureTimeChannel(), this.config.emsFailureTime());
+		setWriteValueIfNotRead(this.getVppEmsFailureEnableChannel(), this.config.emsFailureTime() > 0);
+
+		this.getVppRemotePowerEnableChannel().setNextWriteValue(result.remoteControlEnabled());
+		this.getVppRemotePowerDurationChannel().setNextWriteValue(VPP_UNLIMITED_DURATION);
+		this.getVppRemotePowerChannel().setNextWriteValue(result.powerPercent());
+	}
+
+	/**
+	 * Hands control back to the inverter; called when the ESS is stopped.
+	 *
+	 * @throws OpenemsNamedException on error
+	 */
+	public void releaseVppControl() throws OpenemsNamedException {
+		if (!this.vppAvailable.get()) {
+			return;
+		}
+		this.getVppRemotePowerEnableChannel().setNextWriteValue(false);
+		this.getVppRemotePowerChannel().setNextWriteValue(0);
+	}
+
+	/**
+	 * Does the inverter answer on the VPP register bank?.
+	 *
+	 * @return true if the VPP protocol is available
+	 */
+	public boolean isVppAvailable() {
+		return this.vppAvailable.get();
+	}
+
+	/**
+	 * Simulates the result of the VPP probe.
+	 *
+	 * @param available true if the VPP register bank answers
+	 */
+	@VisibleForTesting
+	protected void setVppAvailable(boolean available) {
+		this.vppAvailable.set(available);
 	}
 
 	/**
@@ -500,7 +791,11 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 
 	@Override
 	public int getPowerPrecision() {
-		// The power rate is set in percent of the nominal battery power
+		if (this.config.controlMode().isVpp() && this.vppAvailable.get()) {
+			// The VPP Set-Point has a resolution of 1 % of the nominal battery power
+			return Math.max(1, this.getBdcRatedPower() / 100);
+		}
+		// The legacy power rate is quantized to avoid writes to non-volatile memory
 		return Math.max(1, this.config.maxBatteryDischargePower() * Math.max(1, this.config.powerRateStep()) / 100);
 	}
 
