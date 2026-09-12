@@ -17,6 +17,7 @@ import static org.osgi.service.component.annotations.ReferencePolicy.STATIC;
 import static org.osgi.service.component.annotations.ReferencePolicyOption.GREEDY;
 
 import java.time.Duration;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -55,6 +56,7 @@ import io.openems.edge.bridge.modbus.api.task.FC4ReadInputRegistersTask;
 import io.openems.edge.bridge.modbus.api.task.Task;
 import io.openems.edge.common.channel.EnumReadChannel;
 import io.openems.edge.common.channel.IntegerReadChannel;
+import io.openems.edge.common.channel.WriteChannel;
 import io.openems.edge.common.component.ComponentManager;
 import io.openems.edge.common.component.OpenemsComponent;
 import io.openems.edge.common.event.EdgeEventConstants;
@@ -659,14 +661,42 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	 * @throws OpenemsNamedException on error
 	 */
 	private void applyVppSetPoint(VppApplyPowerHandler.Result result) throws OpenemsNamedException {
-		// Stored in non-volatile memory: only write on change
-		setWriteValueIfNotRead(this.getVppControlAuthorityChannel(), true);
-		setWriteValueIfNotRead(this.getVppEmsFailureTimeChannel(), this.config.emsFailureTime());
-		setWriteValueIfNotRead(this.getVppEmsFailureEnableChannel(), this.config.emsFailureTime() > 0);
+		// Stored in non-volatile memory: only write on change, and only if the
+		// inverter actually exposes the register
+		writeIfRegisterExists(this.getVppControlAuthorityChannel(), true);
+		writeIfRegisterExists(this.getVppEmsFailureTimeChannel(), this.config.emsFailureTime());
+		writeIfRegisterExists(this.getVppEmsFailureEnableChannel(), this.config.emsFailureTime() > 0);
 
 		this.getVppRemotePowerEnableChannel().setNextWriteValue(result.remoteControlEnabled());
 		this.getVppRemotePowerDurationChannel().setNextWriteValue(VPP_UNLIMITED_DURATION);
 		this.getVppRemotePowerChannel().setNextWriteValue(result.powerPercent());
+	}
+
+	/**
+	 * Writes a value only if the register exists and currently holds a different
+	 * value.
+	 *
+	 * <p>
+	 * The VPP register bank grew over several protocol versions, so a given
+	 * firmware does not necessarily expose every register. A register that never
+	 * delivered a read value is skipped; writing it would fail with 'illegal data
+	 * address' in every Cycle, because the read-back that
+	 * {@link io.openems.edge.common.channel.ChannelUtils#setWriteValueIfNotRead}
+	 * compares against stays undefined.
+	 *
+	 * @param <T>     the type of the value
+	 * @param channel the {@link WriteChannel}
+	 * @param value   the value to write
+	 * @throws OpenemsNamedException on error
+	 */
+	private static <T> void writeIfRegisterExists(WriteChannel<T> channel, T value) throws OpenemsNamedException {
+		if (!channel.value().isDefined()) {
+			return;
+		}
+		if (Objects.equals(channel.value().get(), value)) {
+			return;
+		}
+		channel.setNextWriteValue(value);
 	}
 
 	/**

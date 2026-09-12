@@ -52,6 +52,9 @@ provides a real remote Set-Point:
 |Read-back of the value the inverter actually applies
 |===
 
+All three control registers are documented with a length of one and lie next to
+each other, so they are written in a single FC16 block.
+
 These three registers are explicitly *not* stored in non-volatile memory, so
 they are written in every Cycle without quantization or throttling. Note the
 inverted sign convention: OpenEMS counts positive as discharge, Growatt counts
@@ -82,12 +85,21 @@ at startup.
 
 The probe requires a plausible equipment type code: some inverters answer a read
 on the VPP register bank with zeros instead of rejecting it, and Table 3-1 of
-the protocol document has no code zero, so a zero is treated as 'no VPP'.
+the protocol document has no code zero, so a zero is treated as 'no VPP'. Any
+other value is accepted on purpose - a SPH4600 in the field reports 3501, which
+is not listed in Table 3-1, so matching against that table would reject working
+devices.
 
 Note on register 30099 (VPP protocol version): it was only added with protocol
 version V2.0, while the control registers 30407-30409 exist since V1.01. Older
 firmware can therefore support VPP and still report 0 here - which is why the
-probe does not use this register. Beyond that, the protocol document lists it
+probe does not use this register. This combination has been observed in the
+field: 30000 answers with 3501 while 30099 reads 0.
+
+For the same reason the registers that are not part of V1.01 are only written
+once the inverter has actually delivered a read value for them - the watchdog
+registers 30203/30204 arrived with V1.03. Writing a register that the firmware
+does not implement would fail with 'illegal data address' in every Cycle. Beyond that, the protocol document lists it
 with a length of 15, which cannot be right - that would reach up to 30113 and
 collide with 30100 'Control authority', 30101 'On off command' and 30104
 'System time'. The register bank is contiguous, so 30084 'Reserved' covers
