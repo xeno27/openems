@@ -388,6 +388,55 @@ public class GrowattSphEssImplTest {
 	}
 
 	@Test
+	public void testIneffectiveVppControlFallsBackToTheLegacyPath() throws Exception {
+		var ess = new GrowattSphEssImpl();
+		final var test = createEss(ess, ControlMode.REMOTE_VPP, 5000);
+		ess.setVppAvailable(true);
+		final StateChannel notApplied = ess.channel(GrowattSph.ChannelId.VPP_SET_POINT_NOT_APPLIED);
+		final IntegerWriteChannel remotePower = ess.channel(GrowattSph.ChannelId.VPP_REMOTE_POWER);
+
+		// The inverter acknowledges the write but keeps reporting zero as applied
+		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_ACTUAL_CONTROL_POWER, 0);
+
+		for (var i = 0; i < 5; i++) {
+			ess.applyPower(-2500, 0);
+			assertEquals(50, remotePower.getNextWriteValueAndReset().get().intValue());
+			test.next(new TestCase());
+		}
+
+		assertTrue(notApplied.getNextValue().get());
+
+		// From now on the priority and time-slot control is used
+		ess.applyPower(-2300, 0);
+		final IntegerWriteChannel chargePowerRate = ess
+				.channel(GrowattSph.ChannelId.BATTERY_FIRST_CHARGE_POWER_RATE);
+		assertTrue(remotePower.getNextWriteValueAndReset().isEmpty());
+		assertEquals(50, chargePowerRate.getNextWriteValueAndReset().get().intValue());
+
+		test.deactivate();
+	}
+
+	@Test
+	public void testAppliedVppSetPointRaisesNoWarning() throws Exception {
+		var ess = new GrowattSphEssImpl();
+		final var test = createEss(ess, ControlMode.REMOTE_VPP, 5000);
+		ess.setVppAvailable(true);
+		final StateChannel notApplied = ess.channel(GrowattSph.ChannelId.VPP_SET_POINT_NOT_APPLIED);
+
+		// The inverter reports the Set-Point as applied
+		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_ACTUAL_CONTROL_POWER, 50);
+
+		for (var i = 0; i < 6; i++) {
+			ess.applyPower(-2500, 0);
+			test.next(new TestCase());
+		}
+
+		assertFalse(notApplied.getNextValue().get());
+
+		test.deactivate();
+	}
+
+	@Test
 	public void testReleaseVppControlHandsControlBack() throws Exception {
 		var ess = new GrowattSphEssImpl();
 		final var test = createEss(ess, ControlMode.REMOTE_VPP, 5000);

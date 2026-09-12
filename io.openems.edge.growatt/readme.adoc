@@ -73,6 +73,16 @@ preferred automatically when available: AC power (31100), battery power as a
 single signed value (31200), *dynamic battery power limits from the BMS*
 (31210/31212), SOC/SOH, fault and alarm codes with sub codes.
 
+==== Verifying that the Set-Point is applied
+
+The protocol documents register 30474 as the read-back of register 30409. That
+read-back is checked in every Cycle, because a Growatt inverter acknowledges a
+write into a register bank it does not implement instead of rejecting it - the
+Set-Point would be lost silently. If 30474 does not follow 30409 for five
+Cycles, `VPP_SET_POINT_NOT_APPLIED` is raised and the Component falls back to
+the priority and time-slot control. A Set-Point of zero is not evaluated,
+because an inverter that ignores the remote control reports zero as well.
+
 ==== Availability and fallback
 
 The VPP register bank only exists on firmware that implements the protocol. The

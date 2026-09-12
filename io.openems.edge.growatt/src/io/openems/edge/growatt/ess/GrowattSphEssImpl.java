@@ -81,6 +81,7 @@ import io.openems.edge.growatt.common.LimitedWriteAttempts;
 import io.openems.edge.growatt.common.VppAllowedPowerHandler;
 import io.openems.edge.growatt.common.VppApplyPowerHandler;
 import io.openems.edge.growatt.common.VppPowerHandler;
+import io.openems.edge.growatt.common.VppSetPointVerifier;
 import io.openems.edge.growatt.common.WriteThrottle;
 import io.openems.edge.growatt.common.enums.ControlMode;
 import io.openems.edge.growatt.common.enums.SystemWorkMode;
@@ -134,6 +135,12 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	 */
 	private static final int VPP_SETTING_WRITE_ATTEMPTS = 3;
 
+	/**
+	 * How many Cycles the Set-Point read-back may disagree before the VPP control
+	 * is considered ineffective.
+	 */
+	private static final int VPP_SET_POINT_MISMATCHES = 5;
+
 	private final Logger log = LoggerFactory.getLogger(GrowattSphEssImpl.class);
 	private final StateMachine stateMachine = new StateMachine(State.UNDEFINED);
 	private final AtomicReference<StartStop> startStopTarget = new AtomicReference<>(StartStop.UNDEFINED);
@@ -165,6 +172,8 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	private final AtomicBoolean vppAvailable = new AtomicBoolean(false);
 	private final LimitedWriteAttempts vppSettingAttempts = new LimitedWriteAttempts(
 			VPP_SETTING_WRITE_ATTEMPTS);
+	private final VppSetPointVerifier vppSetPointVerifier = new VppSetPointVerifier(VPP_SET_POINT_MISMATCHES);
+	private final AtomicReference<Integer> lastVppSetPoint = new AtomicReference<>(null);
 
 	private Config config;
 	private WriteThrottle writeThrottle;
@@ -538,6 +547,7 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 		case EdgeEventConstants.TOPIC_CYCLE_AFTER_PROCESS_IMAGE -> {
 			this.updatePowerAndEnergyChannels();
 			this.updateAllowedPowerChannels();
+			this.verifyVppSetPoint();
 			this.runStateMachine();
 		}
 		}
@@ -578,6 +588,26 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 			this.calculateAcChargeEnergy.update(acActivePower * -1);
 			this.calculateAcDischargeEnergy.update(0);
 		}
+	}
+
+	/**
+	 * Checks whether the inverter applies the VPP Set-Point.
+	 *
+	 * <p>
+	 * If the read-back in register 30474 does not follow register 30409, the
+	 * remote control has no effect - which a plain Modbus write cannot detect,
+	 * because an inverter without the VPP register bank acknowledges the write
+	 * anyway. In that case the warning is raised and
+	 * {@link #applyPower(int, int)} falls back to the priority and time-slot
+	 * control.
+	 */
+	private void verifyVppSetPoint() {
+		if (!this.vppAvailable.get() || !this.config.controlMode().isVpp()) {
+			return;
+		}
+		var applied = this.vppSetPointVerifier.verify(this.lastVppSetPoint.get(), //
+				this.<IntegerReadChannel>channel(GrowattSph.ChannelId.VPP_ACTUAL_CONTROL_POWER).getNextValue().get());
+		this.channel(GrowattSph.ChannelId.VPP_SET_POINT_NOT_APPLIED).setNextValue(!applied);
 	}
 
 	/**
@@ -628,7 +658,8 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 		final var pvProduction = this.calculatePvProduction();
 		final var pv = pvProduction == null ? 0 : pvProduction;
 
-		if (this.config.controlMode().isVpp() && this.vppAvailable.get()) {
+		if (this.config.controlMode().isVpp() && this.vppAvailable.get()
+				&& !this.vppSetPointVerifier.hasFailed()) {
 			this.applyVppSetPoint(VppApplyPowerHandler.calculate(activePower, pv, this.getBdcRatedPower()));
 			return;
 		}
@@ -676,6 +707,7 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 		this.getVppRemotePowerEnableChannel().setNextWriteValue(result.remoteControlEnabled());
 		this.getVppRemotePowerDurationChannel().setNextWriteValue(VPP_UNLIMITED_DURATION);
 		this.getVppRemotePowerChannel().setNextWriteValue(result.powerPercent());
+		this.lastVppSetPoint.set(result.powerPercent());
 	}
 
 	/**
@@ -729,6 +761,7 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 		}
 		this.getVppRemotePowerEnableChannel().setNextWriteValue(false);
 		this.getVppRemotePowerChannel().setNextWriteValue(0);
+		this.lastVppSetPoint.set(0);
 	}
 
 	/**

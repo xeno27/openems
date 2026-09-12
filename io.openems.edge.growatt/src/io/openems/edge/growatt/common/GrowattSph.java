@@ -206,6 +206,9 @@ public interface GrowattSph extends OpenemsComponent {
 		/*
 		 * State-Channels.
 		 */
+		VPP_SET_POINT_NOT_APPLIED(Doc.of(Level.WARNING) //
+				.text("The inverter does not apply the VPP Set-Point: register 30474 does not follow "
+						+ "register 30409. Falling back to the priority and time-slot control.")), //
 		VPP_SETTINGS_NOT_APPLIED(Doc.of(Level.WARNING) //
 				.text("The inverter did not accept 'Control authority' or the EMS watchdog registers. "
 						+ "Those registers were added in later versions of the VPP protocol; the "
