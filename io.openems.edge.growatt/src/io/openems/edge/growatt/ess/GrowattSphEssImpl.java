@@ -346,6 +346,22 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	}
 
 	/**
+	 * Is this a plausible answer of the VPP probe?.
+	 *
+	 * <p>
+	 * Some inverters answer a read on the VPP register bank with zeros instead of
+	 * rejecting it, even though they do not implement the protocol. Table 3-1 of
+	 * the protocol document has no equipment type code zero, so a zero means that
+	 * the register bank is answering but empty.
+	 *
+	 * @param deviceTypeCode the value of Holding-Register 30000
+	 * @return true if the inverter reported an equipment type code
+	 */
+	protected static boolean isVppProbeSuccessful(Object deviceTypeCode) {
+		return deviceTypeCode instanceof Integer dtc && dtc > 0;
+	}
+
+	/**
 	 * Evaluates the answer of the VPP probe and adds the VPP Tasks on success.
 	 *
 	 * <p>
@@ -357,7 +373,7 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	 *                       inverter did not answer
 	 */
 	protected synchronized void onVppProbeResult(Object deviceTypeCode) {
-		if (deviceTypeCode == null) {
+		if (!isVppProbeSuccessful(deviceTypeCode)) {
 			this.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE)
 					.setNextValue(!this.vppAvailable.get() && this.config.controlMode().isVpp());
 			return;

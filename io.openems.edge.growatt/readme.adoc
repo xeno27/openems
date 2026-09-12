@@ -80,7 +80,14 @@ after five consecutive errors and is restarted whenever the Modbus connection
 recovers. On a device without VPP support this costs a handful of failed reads
 at startup.
 
-Note on register 30099 (VPP protocol version): the protocol document lists it
+The probe requires a plausible equipment type code: some inverters answer a read
+on the VPP register bank with zeros instead of rejecting it, and Table 3-1 of
+the protocol document has no code zero, so a zero is treated as 'no VPP'.
+
+Note on register 30099 (VPP protocol version): it was only added with protocol
+version V2.0, while the control registers 30407-30409 exist since V1.01. Older
+firmware can therefore support VPP and still report 0 here - which is why the
+probe does not use this register. Beyond that, the protocol document lists it
 with a length of 15, which cannot be right - that would reach up to 30113 and
 collide with 30100 'Control authority', 30101 'On off command' and 30104
 'System time'. The register bank is contiguous, so 30084 'Reserved' covers

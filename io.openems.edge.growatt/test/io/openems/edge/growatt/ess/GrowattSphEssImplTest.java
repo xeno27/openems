@@ -198,6 +198,30 @@ public class GrowattSphEssImplTest {
 	}
 
 	@Test
+	public void testProbeNeedsAnEquipmentTypeCode() {
+		// Table 3-1 of the VPP protocol has no equipment type code zero, so an
+		// inverter that answers with zeros does not implement the protocol
+		assertFalse(GrowattSphEssImpl.isVppProbeSuccessful(null));
+		assertFalse(GrowattSphEssImpl.isVppProbeSuccessful(0));
+		assertTrue(GrowattSphEssImpl.isVppProbeSuccessful(3502));
+		assertTrue(GrowattSphEssImpl.isVppProbeSuccessful(3601));
+	}
+
+	@Test
+	public void testProbeWithZeroKeepsTheLegacyPath() throws Exception {
+		var ess = new GrowattSphEssImpl();
+		final var test = createEss(ess, ControlMode.REMOTE_VPP);
+		final StateChannel warning = ess.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE);
+
+		ess.onVppProbeResult(0);
+
+		assertFalse(ess.isVppAvailable());
+		assertTrue(warning.getNextValue().get());
+
+		test.deactivate();
+	}
+
+	@Test
 	public void testASingleFailedProbeDoesNotRevokeAnEstablishedVpp() throws Exception {
 		var ess = new GrowattSphEssImpl();
 		final var test = createEss(ess, ControlMode.REMOTE_VPP);
