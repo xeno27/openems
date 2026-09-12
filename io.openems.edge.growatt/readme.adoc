@@ -73,10 +73,19 @@ single signed value (31200), *dynamic battery power limits from the BMS*
 ==== Availability and fallback
 
 The VPP register bank only exists on firmware that implements the protocol. The
-Component reads register 30099 (VPP protocol version) at startup; the probe
-gives up after five consecutive errors and is restarted whenever the Modbus
-connection recovers. On a device without VPP support this costs a handful of
-failed reads at startup.
+Component probes it with register 30000 (equipment type code): it is the first
+register of the bank and documented as a single register, so the probe cannot
+fail because of a partial read of a multi-register group. The probe gives up
+after five consecutive errors and is restarted whenever the Modbus connection
+recovers. On a device without VPP support this costs a handful of failed reads
+at startup.
+
+Note on register 30099 (VPP protocol version): the protocol document lists it
+with a length of 15, which cannot be right - that would reach up to 30113 and
+collide with 30100 'Control authority', 30101 'On off command' and 30104
+'System time'. The register bank is contiguous, so 30084 'Reserved' covers
+30084-30098 and 30099 is a single register. It is read in its own Task, so a
+device that rejects the read does not affect the other VPP Tasks.
 
 If `REMOTE_VPP` is configured but the inverter does not answer, the
 `VPP_NOT_AVAILABLE` warning is raised and the Component falls back to the

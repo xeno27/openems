@@ -328,16 +328,18 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 
 		/*
 		 * The VPP register bank only exists on firmware that implements the Growatt
-		 * VPP protocol. Read the protocol version; if the inverter answers, add the
-		 * VPP Tasks, otherwise give up after a few errors and keep the priority and
-		 * time-slot control. The probe is restarted whenever the Modbus connection
-		 * recovers, so a device that was temporarily unreachable is not permanently
-		 * treated as 'without VPP'.
+		 * VPP protocol. Probe it with the equipment type code (30000): it is the first
+		 * register of the bank and documented as a single register, so it cannot fail
+		 * because of a partial read of a multi-register group. If the inverter
+		 * answers, the VPP Tasks are added; otherwise the probe gives up after a few
+		 * errors and the priority and time-slot control is kept. The probe is
+		 * restarted whenever the Modbus connection recovers, so a device that was
+		 * temporarily unreachable is not permanently treated as 'without VPP'.
 		 */
 		readElementsUntil(this.modbusProtocol, abortAfterNthErrors(VPP_PROBE_ATTEMPTS),
 				restartAfterChannelChange(this.getModbusCommunicationFailedChannel()),
-				executeStateConsumer -> new FC3ReadRegistersTask(executeStateConsumer, 30099, Priority.LOW,
-						m(GrowattSph.ChannelId.VPP_PROTOCOL_VERSION, new UnsignedWordElement(30099)) //
+				executeStateConsumer -> new FC3ReadRegistersTask(executeStateConsumer, 30000, Priority.LOW,
+						m(GrowattSph.ChannelId.VPP_DEVICE_TYPE_CODE, new UnsignedWordElement(30000)) //
 								.onUpdateCallback(this::onVppProbeResult)));
 
 		return this.modbusProtocol;
@@ -346,12 +348,18 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	/**
 	 * Evaluates the answer of the VPP probe and adds the VPP Tasks on success.
 	 *
-	 * @param protocolVersion the value of Holding-Register 30099; null if the
-	 *                        inverter did not answer
+	 * <p>
+	 * A missing answer only raises the warning as long as the VPP register bank
+	 * has never answered; once it is established, a single failed read does not
+	 * revoke it.
+	 *
+	 * @param deviceTypeCode the value of Holding-Register 30000; null if the
+	 *                       inverter did not answer
 	 */
-	private synchronized void onVppProbeResult(Object protocolVersion) {
-		if (protocolVersion == null) {
-			this.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE).setNextValue(this.config.controlMode().isVpp());
+	protected synchronized void onVppProbeResult(Object deviceTypeCode) {
+		if (deviceTypeCode == null) {
+			this.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE)
+					.setNextValue(!this.vppAvailable.get() && this.config.controlMode().isVpp());
 			return;
 		}
 		this.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE).setNextValue(false);
@@ -377,8 +385,10 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 				/*
 				 * Hold-Registers: device information.
 				 */
-				new FC3ReadRegistersTask(30000, Priority.LOW, //
-						m(GrowattSph.ChannelId.VPP_DEVICE_TYPE_CODE, new UnsignedWordElement(30000))), //
+				// 30099 is documented with a length of 15, which collides with 30100; the
+				// contiguous layout of the register bank shows that it is a single register
+				new FC3ReadRegistersTask(30099, Priority.LOW, //
+						m(GrowattSph.ChannelId.VPP_PROTOCOL_VERSION, new UnsignedWordElement(30099))), //
 
 				new FC3ReadRegistersTask(30016, Priority.LOW, //
 						m(GrowattSph.ChannelId.VPP_RATED_POWER, new UnsignedDoublewordElement(30016),

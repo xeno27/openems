@@ -17,6 +17,7 @@ import io.openems.common.test.DummyConfigurationAdmin;
 import io.openems.edge.bridge.modbus.test.DummyModbusBridge;
 import io.openems.edge.common.channel.BooleanWriteChannel;
 import io.openems.edge.common.channel.IntegerWriteChannel;
+import io.openems.edge.common.channel.StateChannel;
 import io.openems.edge.common.startstop.StartStop;
 import io.openems.edge.common.startstop.StartStopConfig;
 import io.openems.edge.common.sum.GridMode;
@@ -173,6 +174,40 @@ public class GrowattSphEssImplTest {
 
 		// The DummyModbusBridge never answers, so the VPP register bank stays unknown
 		assertFalse(ess.isVppAvailable());
+
+		test.deactivate();
+	}
+
+	@Test
+	public void testProbeWithoutAnswerRaisesTheWarningOnlyInVppMode() throws Exception {
+		var vppEss = new GrowattSphEssImpl();
+		final var vppTest = createEss(vppEss, ControlMode.REMOTE_VPP);
+		final StateChannel vppWarning = vppEss.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE);
+
+		vppEss.onVppProbeResult(null);
+		assertTrue(vppWarning.getNextValue().get());
+		vppTest.deactivate();
+
+		var legacyEss = new GrowattSphEssImpl();
+		final var legacyTest = createEss(legacyEss, ControlMode.REMOTE);
+		final StateChannel legacyWarning = legacyEss.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE);
+
+		legacyEss.onVppProbeResult(null);
+		assertFalse(legacyWarning.getNextValue().get());
+		legacyTest.deactivate();
+	}
+
+	@Test
+	public void testASingleFailedProbeDoesNotRevokeAnEstablishedVpp() throws Exception {
+		var ess = new GrowattSphEssImpl();
+		final var test = createEss(ess, ControlMode.REMOTE_VPP);
+		final StateChannel warning = ess.channel(GrowattSph.ChannelId.VPP_NOT_AVAILABLE);
+
+		ess.setVppAvailable(true);
+		ess.onVppProbeResult(null);
+
+		assertTrue(ess.isVppAvailable());
+		assertFalse(warning.getNextValue().get());
 
 		test.deactivate();
 	}
