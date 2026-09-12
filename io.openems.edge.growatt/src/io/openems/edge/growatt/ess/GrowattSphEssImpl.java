@@ -17,6 +17,8 @@ import static org.osgi.service.component.annotations.ReferencePolicy.STATIC;
 import static org.osgi.service.component.annotations.ReferencePolicyOption.GREEDY;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -75,6 +77,7 @@ import io.openems.edge.growatt.charger.GrowattCharger;
 import io.openems.edge.growatt.common.AllowedPowerHandler;
 import io.openems.edge.growatt.common.ApplyPowerHandler;
 import io.openems.edge.growatt.common.GrowattSph;
+import io.openems.edge.growatt.common.LimitedWriteAttempts;
 import io.openems.edge.growatt.common.VppAllowedPowerHandler;
 import io.openems.edge.growatt.common.VppApplyPowerHandler;
 import io.openems.edge.growatt.common.VppPowerHandler;
@@ -126,6 +129,11 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	 */
 	private static final int VPP_UNLIMITED_DURATION = 0;
 
+	/**
+	 * How often an optional VPP setting is written before the Component gives up.
+	 */
+	private static final int VPP_SETTING_WRITE_ATTEMPTS = 3;
+
 	private final Logger log = LoggerFactory.getLogger(GrowattSphEssImpl.class);
 	private final StateMachine stateMachine = new StateMachine(State.UNDEFINED);
 	private final AtomicReference<StartStop> startStopTarget = new AtomicReference<>(StartStop.UNDEFINED);
@@ -155,6 +163,8 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	}
 
 	private final AtomicBoolean vppAvailable = new AtomicBoolean(false);
+	private final LimitedWriteAttempts vppSettingAttempts = new LimitedWriteAttempts(
+			VPP_SETTING_WRITE_ATTEMPTS);
 
 	private Config config;
 	private WriteThrottle writeThrottle;
@@ -661,11 +671,7 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	 * @throws OpenemsNamedException on error
 	 */
 	private void applyVppSetPoint(VppApplyPowerHandler.Result result) throws OpenemsNamedException {
-		// Stored in non-volatile memory: only write on change, and only if the
-		// inverter actually exposes the register
-		writeIfRegisterExists(this.getVppControlAuthorityChannel(), true);
-		writeIfRegisterExists(this.getVppEmsFailureTimeChannel(), this.config.emsFailureTime());
-		writeIfRegisterExists(this.getVppEmsFailureEnableChannel(), this.config.emsFailureTime() > 0);
+		this.applyOptionalVppSettings();
 
 		this.getVppRemotePowerEnableChannel().setNextWriteValue(result.remoteControlEnabled());
 		this.getVppRemotePowerDurationChannel().setNextWriteValue(VPP_UNLIMITED_DURATION);
@@ -673,30 +679,43 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 	}
 
 	/**
-	 * Writes a value only if the register exists and currently holds a different
-	 * value.
+	 * Writes the VPP settings that are not part of every protocol version.
 	 *
 	 * <p>
-	 * The VPP register bank grew over several protocol versions, so a given
-	 * firmware does not necessarily expose every register. A register that never
-	 * delivered a read value is skipped; writing it would fail with 'illegal data
-	 * address' in every Cycle, because the read-back that
-	 * {@link io.openems.edge.common.channel.ChannelUtils#setWriteValueIfNotRead}
-	 * compares against stays undefined.
+	 * The VPP register bank grew over several protocol versions, and the inverters
+	 * answer a read on a register they do not implement with zero instead of
+	 * rejecting it. A setting whose read-back never reaches the desired value is
+	 * therefore indistinguishable from a missing register, so the number of write
+	 * attempts is limited. Once they are used up, the Component stops trying and
+	 * raises {@link GrowattSph.ChannelId#VPP_SETTINGS_NOT_APPLIED}; the Set-Point
+	 * registers keep working.
 	 *
-	 * @param <T>     the type of the value
-	 * @param channel the {@link WriteChannel}
-	 * @param value   the value to write
 	 * @throws OpenemsNamedException on error
 	 */
-	private static <T> void writeIfRegisterExists(WriteChannel<T> channel, T value) throws OpenemsNamedException {
-		if (!channel.value().isDefined()) {
+	private void applyOptionalVppSettings() throws OpenemsNamedException {
+		final var desired = List.<Map.Entry<WriteChannel<?>, Object>>of(//
+				Map.entry(this.getVppControlAuthorityChannel(), true), //
+				Map.entry(this.getVppEmsFailureTimeChannel(), this.config.emsFailureTime()), //
+				Map.entry(this.getVppEmsFailureEnableChannel(), this.config.emsFailureTime() > 0));
+
+		if (desired.stream().allMatch(e -> Objects.equals(e.getKey().value().get(), e.getValue()))) {
+			// Everything is already as configured
+			this.vppSettingAttempts.reset();
+			this.channel(GrowattSph.ChannelId.VPP_SETTINGS_NOT_APPLIED).setNextValue(false);
 			return;
 		}
-		if (Objects.equals(channel.value().get(), value)) {
+		if (!this.vppSettingAttempts.tryAttempt()) {
+			this.channel(GrowattSph.ChannelId.VPP_SETTINGS_NOT_APPLIED).setNextValue(true);
 			return;
 		}
-		channel.setNextWriteValue(value);
+		for (var entry : desired) {
+			writeUnchecked(entry.getKey(), entry.getValue());
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void writeUnchecked(WriteChannel<?> channel, Object value) throws OpenemsNamedException {
+		((WriteChannel<Object>) channel).setNextWriteValue(value);
 	}
 
 	/**

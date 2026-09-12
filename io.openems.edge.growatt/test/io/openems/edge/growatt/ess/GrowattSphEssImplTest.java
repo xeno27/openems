@@ -313,6 +313,7 @@ public class GrowattSphEssImplTest {
 		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_BATTERY_POWER, 0);
 		// The inverter exposes 'Control authority' and reports it as not enabled
 		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_CONTROL_AUTHORITY, false);
+		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_EMS_FAILURE_TIME, 0);
 		ess.applyPower(-2500, 0);
 
 		final BooleanWriteChannel remoteEnable = ess.channel(GrowattSph.ChannelId.VPP_REMOTE_POWER_ENABLE);
@@ -335,21 +336,28 @@ public class GrowattSphEssImplTest {
 	}
 
 	@Test
-	public void testOptionalVppRegistersAreSkippedWhenTheyDoNotExist() throws Exception {
+	public void testOptionalVppSettingsGiveUpOnAnInverterThatAnswersZero() throws Exception {
 		var ess = new GrowattSphEssImpl();
 		final var test = createEss(ess, ControlMode.REMOTE_VPP, 5000);
 		ess.setVppAvailable(true);
-
-		// Firmware older than VPP protocol V1.03 has no watchdog registers, so they
-		// never deliver a read value
-		ess.applyPower(-2500, 0);
-
+		final StateChannel notApplied = ess.channel(GrowattSph.ChannelId.VPP_SETTINGS_NOT_APPLIED);
 		final IntegerWriteChannel failureTime = ess.channel(GrowattSph.ChannelId.VPP_EMS_FAILURE_TIME);
-		final BooleanWriteChannel controlAuthority = ess.channel(GrowattSph.ChannelId.VPP_CONTROL_AUTHORITY);
-		assertTrue(failureTime.getNextWriteValue().isEmpty());
-		assertTrue(controlAuthority.getNextWriteValue().isEmpty());
 
-		// The Set-Point itself is written regardless
+		// Firmware without the watchdog registers answers zero instead of rejecting
+		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_EMS_FAILURE_TIME, 0);
+		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_CONTROL_AUTHORITY, false);
+
+		for (var i = 0; i < 3; i++) {
+			ess.applyPower(-2500, 0);
+			assertEquals(60, failureTime.getNextWriteValueAndReset().get().intValue());
+		}
+
+		// After three attempts the Component stops writing
+		ess.applyPower(-2500, 0);
+		assertTrue(failureTime.getNextWriteValueAndReset().isEmpty());
+		assertTrue(notApplied.getNextValue().get());
+
+		// The Set-Point itself keeps being written
 		final IntegerWriteChannel remotePower = ess.channel(GrowattSph.ChannelId.VPP_REMOTE_POWER);
 		assertEquals(50, remotePower.getNextWriteValue().get().intValue());
 
@@ -357,38 +365,24 @@ public class GrowattSphEssImplTest {
 	}
 
 	@Test
-	public void testOptionalVppRegistersAreWrittenWhenTheyExistAndDiffer() throws Exception {
+	public void testOptionalVppSettingsAreNotRewrittenOnceTheyMatch() throws Exception {
 		var ess = new GrowattSphEssImpl();
 		final var test = createEss(ess, ControlMode.REMOTE_VPP, 5000);
 		ess.setVppAvailable(true);
+		final StateChannel notApplied = ess.channel(GrowattSph.ChannelId.VPP_SETTINGS_NOT_APPLIED);
 
-		// The inverter answered on the watchdog registers with a different value
-		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_EMS_FAILURE_TIME, 30);
-		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_CONTROL_AUTHORITY, false);
-		ess.applyPower(-2500, 0);
-
-		final IntegerWriteChannel failureTime = ess.channel(GrowattSph.ChannelId.VPP_EMS_FAILURE_TIME);
-		final BooleanWriteChannel controlAuthority = ess.channel(GrowattSph.ChannelId.VPP_CONTROL_AUTHORITY);
-		assertEquals(60, failureTime.getNextWriteValue().get().intValue());
-		assertTrue(controlAuthority.getNextWriteValue().get());
-
-		test.deactivate();
-	}
-
-	@Test
-	public void testOptionalVppRegistersAreNotRewrittenWhenTheyAlreadyMatch() throws Exception {
-		var ess = new GrowattSphEssImpl();
-		final var test = createEss(ess, ControlMode.REMOTE_VPP, 5000);
-		ess.setVppAvailable(true);
-
+		// The inverter accepted the settings
 		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_EMS_FAILURE_TIME, 60);
+		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_EMS_FAILURE_ENABLE, true);
 		TestUtils.withValue(ess, GrowattSph.ChannelId.VPP_CONTROL_AUTHORITY, true);
+
 		ess.applyPower(-2500, 0);
 
 		final IntegerWriteChannel failureTime = ess.channel(GrowattSph.ChannelId.VPP_EMS_FAILURE_TIME);
 		final BooleanWriteChannel controlAuthority = ess.channel(GrowattSph.ChannelId.VPP_CONTROL_AUTHORITY);
 		assertTrue(failureTime.getNextWriteValue().isEmpty());
 		assertTrue(controlAuthority.getNextWriteValue().isEmpty());
+		assertFalse(notApplied.getNextValue().get());
 
 		test.deactivate();
 	}

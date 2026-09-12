@@ -96,10 +96,14 @@ firmware can therefore support VPP and still report 0 here - which is why the
 probe does not use this register. This combination has been observed in the
 field: 30000 answers with 3501 while 30099 reads 0.
 
-For the same reason the registers that are not part of V1.01 are only written
-once the inverter has actually delivered a read value for them - the watchdog
-registers 30203/30204 arrived with V1.03. Writing a register that the firmware
-does not implement would fail with 'illegal data address' in every Cycle. Beyond that, the protocol document lists it
+The same applies to the registers that are not part of V1.01: the watchdog
+registers 30203/30204 arrived with V1.03. Because the inverters answer a read on
+a register they do not implement with zero instead of rejecting it, a setting
+whose read-back never reaches the desired value cannot be told apart from a
+missing register. 'Control authority' and the watchdog are therefore written at
+most three times; afterwards the Component stops trying and raises
+`VPP_SETTINGS_NOT_APPLIED`. The Set-Point registers 30407-30409 are written
+regardless, as they exist since V1.01. Beyond that, the protocol document lists it
 with a length of 15, which cannot be right - that would reach up to 30113 and
 collide with 30100 'Control authority', 30101 'On off command' and 30104
 'System time'. The register bank is contiguous, so 30084 'Reserved' covers
