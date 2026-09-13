@@ -1,0 +1,46 @@
+; Anlagenprofile fuer die Lab-Skripte.
+;
+; Kopieren nach  sites.ini  (liegt neben den Skripten) oder nach
+; ~/.config/inverter-lab/sites.ini, oder den Pfad ueber die
+; Umgebungsvariable INVERTER_LAB_SITES setzen.
+;
+; Aufruf dann z. B.:   python3 growatt_lab.py --site growatt probe
+;
+; Ein Profil liefert nur Vorgabewerte - eine Option auf der Kommandozeile
+; gewinnt immer. Unbekannte Schluessel werden ignoriert.
+
+; ---------------------------------------------------------------------------
+; RevPi Nr. 1 - RS485 zum Growatt SPH
+; ---------------------------------------------------------------------------
+[growatt]
+serial    = /dev/ttyRS485
+baud      = 9600
+unit      = 1
+timeout   = 3.0
+; 30026 (BDC-Nennleistung) meldet bei dieser Anlage 0, deshalb fest vorgeben:
+reference = 4600
+; auto = erst 30000 lesen, dann VPP- oder Legacy-Bank waehlen
+bank      = auto
+
+; ---------------------------------------------------------------------------
+; RevPi Nr. 2 - RS485 zum SAJ CH2
+; ---------------------------------------------------------------------------
+[saj]
+serial    = /dev/ttyRS485
+baud      = 9600
+unit      = 1
+timeout   = 3.0
+; Pflicht fuer Schreibbefehle: die Sollwerte sind 0,01 % der Nennleistung
+rated     = 8000
+; inverter = 0x8402 (AC-Seite), battery = 0x8405 (reiner Batteriesollwert)
+mode      = inverter
+keep_time = 30
+
+; ---------------------------------------------------------------------------
+; Sungrow SH20T - im selben Netzwerk, Modbus TCP
+; ---------------------------------------------------------------------------
+[sungrow]
+host      = 192.168.1.60
+port      = 502
+unit      = 1
+timeout   = 3.0
