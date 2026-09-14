@@ -285,9 +285,16 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 						m(GrowattSph.ChannelId.GRID_FIRST_DISCHARGE_POWER_RATE, new UnsignedWordElement(1070)), //
 						m(GrowattSph.ChannelId.GRID_FIRST_STOP_SOC, new UnsignedWordElement(1071))), //
 
+				// The enable flags are written on their own on purpose. Not every
+				// firmware implements them: a measured SPH4600 rejects 1082 with
+				// 'Illegal Data Address' while 1102 works, and writing the whole slot
+				// as one block made the inverter reject the start and stop times along
+				// with it. Split up, a missing flag costs only itself.
 				new FC16WriteRegistersTask(1080, //
 						m(GrowattSph.ChannelId.GRID_FIRST_SLOT_START, new UnsignedWordElement(1080)), //
-						m(GrowattSph.ChannelId.GRID_FIRST_SLOT_STOP, new UnsignedWordElement(1081)), //
+						m(GrowattSph.ChannelId.GRID_FIRST_SLOT_STOP, new UnsignedWordElement(1081))), //
+
+				new FC16WriteRegistersTask(1082, //
 						m(GrowattSph.ChannelId.GRID_FIRST_SLOT_ENABLED, new UnsignedWordElement(1082))), //
 
 				new FC16WriteRegistersTask(1090, //
@@ -297,7 +304,9 @@ public class GrowattSphEssImpl extends AbstractOpenemsModbusComponent
 
 				new FC16WriteRegistersTask(1100, //
 						m(GrowattSph.ChannelId.BATTERY_FIRST_SLOT_START, new UnsignedWordElement(1100)), //
-						m(GrowattSph.ChannelId.BATTERY_FIRST_SLOT_STOP, new UnsignedWordElement(1101)), //
+						m(GrowattSph.ChannelId.BATTERY_FIRST_SLOT_STOP, new UnsignedWordElement(1101))), //
+
+				new FC16WriteRegistersTask(1102, //
 						m(GrowattSph.ChannelId.BATTERY_FIRST_SLOT_ENABLED, new UnsignedWordElement(1102))) //
 		);
 	}
