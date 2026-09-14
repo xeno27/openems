@@ -302,14 +302,44 @@ def build_plan_vpp(watt: float, charging: bool, reference: float,
     return plan
 
 
+def legacy_slot_setup(plan: Plan, base: int, name: str) -> None:
+    """Zeitfenster 00:00-23:59 einrichten und aktivieren.
+
+    Start und Ende liegen zusammen und werden nur geschrieben, wenn sie noch
+    nicht stimmen. Das Aktiv-Flag steht ein Register weiter und ist als
+    optional markiert: auf manchen Firmwares (gemessen an einem SPH4600) gibt
+    es das Grid-First-Flag 1082 schlicht nicht, waehrend 1102 funktioniert.
+    """
+    plan.add(base, [SLOT_START, SLOT_STOP], f"{name} Slot 1 Start/Ende",
+             "Zeitfenster 00:00-23:59 - Slot 1 ist damit fuer den Test belegt",
+             once=True)
+    plan.add(base + 2, 1, f"{name} Slot 1 aktiv", "Zeitfenster eingeschaltet",
+             once=True, optional=True)
+
+
+def build_plan_legacy_hold() -> Plan:
+    """Entladesperre ueber Battery-First - der im Feld erprobte Weg.
+
+    Battery-First mit abgeschaltetem Netzladen heisst: die Batterie wird nicht
+    mehr entladen, die Last geht ans Netz. Geladen wird nur aus PV, was nachts
+    nichts tut - genau deshalb ist das der aussagekraeftige Test.
+    """
+    plan = Plan("Plan: Entladesperre ueber Battery-First (Legacy-Bank)")
+    legacy_slot_setup(plan, 1100, "Battery-First")
+    plan.add(1092, 0, "AC-Charge", "Kein Netzladen - nur die Entladung wird gesperrt",
+             once=True)
+    plan.add(1044, 1, "Prioritaet", "Battery first", once=True)
+    plan.add_reset(1102, 0, "Battery-First Slot 1 aus", "Zeitfenster deaktiviert")
+    plan.add_reset(1044, 0, "Prioritaet", "Load first (Normalbetrieb)")
+    return plan
+
+
 def build_plan_legacy(watt: float, charging: bool, reference: float) -> Plan:
     percent = max(0, min(100, percent_of(watt, reference)))
     if charging:
         plan = Plan(f"Plan: Laden mit {watt:.0f} W ueber Battery-First "
                     f"({percent} % von {reference:.0f} W)")
-        plan.add(1100, [SLOT_START, SLOT_STOP, 1], "Battery-First Slot 1",
-                 "Zeitfenster 00:00-23:59 aktiv - Slot 1 ist damit fuer den Test belegt",
-                 once=True)
+        legacy_slot_setup(plan, 1100, "Battery-First")
         plan.add(1090, percent, "Battery-First Ladeleistungsrate",
                  f"{percent} % Ladeleistung", once=True)
         plan.add(1092, 1, "AC-Charge", "Laden aus dem Netz erlaubt", once=True)
@@ -320,9 +350,7 @@ def build_plan_legacy(watt: float, charging: bool, reference: float) -> Plan:
     else:
         plan = Plan(f"Plan: Entladen mit {watt:.0f} W ueber Grid-First "
                     f"({percent} % von {reference:.0f} W)")
-        plan.add(1080, [SLOT_START, SLOT_STOP, 1], "Grid-First Slot 1",
-                 "Zeitfenster 00:00-23:59 aktiv - Slot 1 ist damit fuer den Test belegt",
-                 once=True)
+        legacy_slot_setup(plan, 1080, "Grid-First")
         plan.add(1070, percent, "Grid-First Entladeleistungsrate",
                  f"{percent} % Entladeleistung", once=True)
         plan.add(1044, 2, "Prioritaet", "Grid first", once=True)
@@ -368,14 +396,19 @@ def check_charge_source(bus: Bus, allow_ac_charge: bool):
     return False
 
 
+def choose_bank(bus: Bus, wanted: str) -> str:
+    if wanted != "auto":
+        return wanted
+    dtc = bus.read_one(HOLDING, 30000)
+    bank = "vpp" if dtc else "legacy"
+    print(f"  Bank automatisch gewaehlt: {bank} (DTC 30000 = {dtc})")
+    return bank
+
+
 def cmd_power(bus: Bus, args, charging: bool) -> int:
     if not check_identity(bus, "Growatt SPH", identity, args.yes, args.force):
         return 2
-    bank = args.bank
-    if bank == "auto":
-        dtc = bus.read_one(HOLDING, 30000)
-        bank = "vpp" if dtc else "legacy"
-        print(f"  Bank automatisch gewaehlt: {bank} (DTC 30000 = {dtc})")
+    bank = choose_bank(bus, args.bank)
 
     if bank == "vpp":
         reference = vpp_reference(bus, args.reference)
@@ -404,12 +437,16 @@ def cmd_power(bus: Bus, args, charging: bool) -> int:
 def cmd_hold(bus: Bus, args) -> int:
     if not check_identity(bus, "Growatt SPH", identity, args.yes, args.force):
         return 2
-    minutes = int(getattr(args, "vpp_minutes", 0))
-    dauer = "unbegrenzt" if minutes == 0 else f"{minutes} min"
-    plan = Plan("Plan: Batterie anhalten (Sollwert 0)")
-    plan.add(30407, [1, minutes, 0], "Remote enable / Dauer / Sollwert",
-             f"Fernsteuerung an, {dauer}, 0 % Leistung")
-    plan.add_reset(30407, [0, 0, 0], "Remote enable / Dauer / Sollwert", "Fernsteuerung aus")
+    if choose_bank(bus, args.bank) == "legacy":
+        plan = build_plan_legacy_hold()
+    else:
+        minutes = int(getattr(args, "vpp_minutes", 0))
+        dauer = "unbegrenzt" if minutes == 0 else f"{minutes} min"
+        plan = Plan("Plan: Batterie anhalten (Sollwert 0, VPP-Bank)")
+        plan.add(30407, [1, minutes, 0], "Remote enable / Dauer / Sollwert",
+                 f"Fernsteuerung an, {dauer}, 0 % Leistung")
+        plan.add_reset(30407, [0, 0, 0], "Remote enable / Dauer / Sollwert",
+                       "Fernsteuerung aus")
     return run_controlled(bus, plan, args.yes, args.duration, args.interval, observe)
 
 

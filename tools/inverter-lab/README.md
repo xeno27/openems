@@ -163,6 +163,24 @@ Beim vorletzten Schritt auf die Zeilen `VPP Sollwert [%] (30409)` und
 Sollwert zeigt, nimmt der Wechselrichter die Vorgabe zwar an, setzt sie aber
 nicht um. Genau das ist bei dieser Anlage noch offen.
 
+### Befund an einem SPH4600 (Firmware mit DTC 3501)
+
+Mit `writeprobe` gemessen, als Beispiel dafuer, was diese Skripte klaeren
+sollen:
+
+* Die **VPP-Bank steuert nicht**. 30407-30410 nehmen Schreibzugriffe an, aber
+  30474 bleibt 0 und die Batterie folgt dem Sollwert nicht. Passend dazu sind
+  30026, 30099, 30100 und der ganze Freigabeteil 0.
+* Die **VPP-Bank misst dagegen richtig**: 31000-31002 liefern echte,
+  mitlaufende Werte. Die Firmware bringt die Lesehaelfte des VPP-Protokolls
+  mit, die Schreibhaelfte nicht.
+* Die **Legacy-Bank ist beschreibbar** - 15 von 16 Adressen. Einzige Ausnahme:
+  **1082** (Grid-First Slot 1 aktiv) antwortet mit `IllegalAddress`, waehrend
+  das Gegenstueck 1102 fuer Battery-First funktioniert.
+
+Deshalb laeuft die Entladesperre ueber Battery-First und das Aktiv-Flag der
+Zeitfenster ist als optional markiert.
+
 ### Womit man die Fernsteuerung wirklich prueft
 
 Ein **Ladebefehl ist der schlechteste erste Test**. Laden braucht eine
@@ -174,7 +192,12 @@ die PV unter 100 W liegt und 30410 auf 0 steht, und nennt die Alternativen.
 Aussagekraeftig sind stattdessen:
 
     python3 growatt_lab.py --site growatt hold --yes --duration 60
+    python3 growatt_lab.py --site growatt --bank legacy hold --yes --duration 60
     python3 growatt_lab.py --site growatt discharge 1000 --yes --duration 60
+
+`hold` gibt es in beiden Baenken. Auf der Legacy-Bank ist es Battery-First mit
+abgeschaltetem Netzladen: die Batterie wird nicht mehr entladen, die Last geht
+ans Netz. Das ist der im Feld erprobte Weg und bei PV = 0 sofort sichtbar.
 
 Beide brauchen keine Energiequelle. Entlaedt die Batterie gerade mit 2,4 kW
 und bleibt sie bei `hold` unveraendert dabei, ist die Fernsteuerung wirkungslos

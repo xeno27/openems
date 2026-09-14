@@ -434,6 +434,9 @@ class Step:
     name: str
     effect: str
     once: bool = False
+    #: Register, das es nicht auf jeder Firmware gibt. Wird es abgelehnt,
+    #: laeuft der Plan weiter, statt abzubrechen.
+    optional: bool = False
 
     def describe(self, current: list[int | None]) -> str:
         ist = ", ".join("?" if c is None else str(c) for c in current)
@@ -452,9 +455,9 @@ class Plan:
     touched: bool = False
 
     def add(self, address: int, values: int | Sequence[int], name: str, effect: str,
-            once: bool = False) -> None:
+            once: bool = False, optional: bool = False) -> None:
         vals = [values] if isinstance(values, int) else list(values)
-        self.steps.append(Step(address, vals, name, effect, once))
+        self.steps.append(Step(address, vals, name, effect, once, optional))
 
     def add_reset(self, address: int, values: int | Sequence[int], name: str, effect: str) -> None:
         vals = [values] if isinstance(values, int) else list(values)
@@ -471,6 +474,9 @@ class Plan:
             blk = bus.read(HOLDING, step.address, len(step.values))
             current = [None] * len(step.values) if blk is None else [blk[step.address + i] for i in range(len(step.values))]
             print(step.describe(current))
+        if any(step.optional for step in self.steps):
+            print("\n  Nur wenn vorhanden (wird sonst uebersprungen): "
+                  + ", ".join(str(step.address) for step in self.steps if step.optional))
         if any(step.once for step in self.steps):
             print("\n  Nur einmal geschrieben (nichtfluechtiger Speicher): "
                   + ", ".join(str(step.address) for step in self.steps if step.once))
@@ -489,8 +495,32 @@ class Plan:
         weiss, ob ueberhaupt etwas zu korrigieren ist.
         """
         for step in (self.steps if steps is None else steps):
-            bus.write(step.address, step.values)
+            if step.once and self.already_correct(bus, step):
+                print(f"  {step.address}: steht schon richtig, nicht geschrieben.")
+                continue
+            try:
+                bus.write(step.address, step.values)
+            except ModbusError as exc:
+                if not step.optional:
+                    raise
+                print(f"  {step.address} ({step.name}): {exc}", file=sys.stderr)
+                print("    Dieses Register gibt es auf dieser Firmware nicht - "
+                      "der Plan laeuft ohne es weiter.", file=sys.stderr)
+                continue
             self.touched = True
+
+    @staticmethod
+    def already_correct(bus: Bus, step: Step) -> bool:
+        """Steht der Sollwert schon im Register?
+
+        Nur fuer EEPROM-Register geprueft: dort ist jeder vermiedene
+        Schreibzyklus ein gewonnener. Bei fluechtigen Sollwerten waere die
+        zusaetzliche Leseabfrage dagegen reine Buslast.
+        """
+        blk = bus.read(HOLDING, step.address, len(step.values))
+        if blk is None:
+            return False
+        return all(blk.get(step.address + i) == v for i, v in enumerate(step.values))
 
     def apply_reset(self, bus: Bus) -> None:
         if not self.touched:
