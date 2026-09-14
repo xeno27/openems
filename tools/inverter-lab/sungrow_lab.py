@@ -289,6 +289,9 @@ def build_plan(bus: Bus, watt: float, charging: bool, args) -> Plan:
     plan.add(13051, power, "Forced-Leistung", f"{power} W")
     plan.add_reset(13050, CMD_STOP, "Lade-/Entladebefehl", "0xCC = Stopp")
     plan.add_reset(13049, 0, "EMS-Mode", "Eigenverbrauch")
+    # Den Sollwert mit aufraeumen: er wirkt zwar nur im Forced Mode, aber ein
+    # stehengebliebener Wert wuerde beim naechsten Einschalten sofort greifen.
+    plan.add_reset(13051, 0, "Forced-Leistung", "Sollwert auf 0")
     return plan
 
 
@@ -327,6 +330,7 @@ def cmd_reset(bus: Bus, args) -> int:
     plan = Plan("Plan: Normalbetrieb wiederherstellen")
     plan.add(13050, CMD_STOP, "Lade-/Entladebefehl", "0xCC = Stopp", once=True)
     plan.add(13049, 0, "EMS-Mode", "Eigenverbrauch", once=True)
+    plan.add(13051, 0, "Forced-Leistung", "Sollwert auf 0", once=True)
 
     # Eine Grenze nur dann anheben, wenn sie so niedrig steht, dass sie aus
     # einem abgebrochenen Testlauf stammen muss. Sonst ist sie ein bewusst
