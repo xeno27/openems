@@ -83,6 +83,29 @@ Cycles, `VPP_SET_POINT_NOT_APPLIED` is raised and the Component falls back to
 the priority and time-slot control. A Set-Point of zero is not evaluated,
 because an inverter that ignores the remote control reports zero as well.
 
+==== Measured on a SPH4600 (device type code 3501)
+
+The bank answers, but only its reading half works. Registers 30407 to 30410
+accept writes and read back what was written, and the status registers 31000 to
+31002 carry live values that follow the battery. The control half does nothing:
+with 30409 set to +11 % the battery kept discharging at 2.4 kW, and 30474 never
+left zero. The whole unlock area reads zero as well - 30026 (BDC rated power),
+30099, 30100 and 30203/30204 - so the firmware ships the monitoring part of the
+VPP protocol without the dispatch part.
+
+This is what the read-back check is for, and the plant confirms both halves of
+its design: a write into an unimplemented bank is acknowledged rather than
+rejected, so only 30474 reveals the loss of control, and the Component falls
+back to priority and time-slot control on its own. It also confirms why a
+Set-Point of zero is excluded from the check: an inverter that ignores the
+remote control reports zero in 30474, which is exactly what a correctly applied
+zero looks like.
+
+A plant like this is configured with `Control mode` = `REMOTE`; leaving it on
+`REMOTE_VPP` costs the probe and the five read-back Cycles before the fallback
+takes over, and ends up in the same place. `BDC rated power` has to be set by
+hand either way, because 30026 reports zero.
+
 ==== Availability and fallback
 
 The VPP register bank only exists on firmware that implements the protocol. The
