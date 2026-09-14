@@ -121,6 +121,12 @@ Option auf der Kommandozeile gewinnt immer. Die Datei wird gesucht unter
 `$INVERTER_LAB_SITES`, dann `~/.config/inverter-lab/sites.ini`, dann neben den
 Skripten. `--list-sites` zeigt, was gefunden wurde.
 
+`sites.ini` steht in `.gitignore` - die Datei enthaelt Ihre Adressen und wird
+absichtlich nicht mit eingecheckt. Ohne sie bricht ein `--site`-Aufruf ab und
+nennt den Kopierbefehl; ein Tippfehler im Profilnamen soll nicht stillschweigend
+auf einer beliebigen Schnittstelle landen. `selftest` laeuft auch ohne Profil,
+weil es gar keine Verbindung aufbaut.
+
 ## Bedienung (bei allen drei gleich)
 
     probe                    Was antwortet? Bewertung im Klartext
@@ -140,7 +146,10 @@ automatische Rueckstellung, Vorgabe 60), `--interval` (Anzeigetakt) und
 
 ## Empfohlene Reihenfolge fuer die erste Anlage
 
-    python3 growatt_lab.py --site growatt selftest     # ohne Anlage
+    cp sites.ini.example sites.ini                     # einmalig, dann anpassen
+    python3 growatt_lab.py --list-sites                # steht das Profil drin?
+
+    python3 growatt_lab.py selftest                    # braucht kein Profil
     python3 growatt_lab.py --site growatt probe        # was antwortet?
     python3 growatt_lab.py --site growatt read         # alles dekodiert
     python3 growatt_lab.py --site growatt watch        # zyklisch, Ctrl-C beendet

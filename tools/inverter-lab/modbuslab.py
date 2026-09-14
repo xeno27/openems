@@ -99,11 +99,40 @@ def add_site_args(ap: argparse.ArgumentParser) -> None:
     g.add_argument("--list-sites", action="store_true", help="Bekannte Profile anzeigen")
 
 
+#: Unterbefehle, die ohne Anlage und damit ohne Profil auskommen.
+OFFLINE_COMMANDS = ("selftest",)
+
+
+def _missing_site(name: str, cfg: configparser.ConfigParser) -> None:
+    """Erklaeren, warum das Profil fehlt - und wie man es anlegt."""
+    path = sites_path()
+    print(f"Profil '{name}' steht nicht in {path}.", file=sys.stderr)
+    if not os.path.exists(path):
+        example = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "sites.ini.example")
+        print("  Die Datei gibt es noch nicht.", file=sys.stderr)
+        if os.path.exists(example):
+            print("  Anlegen mit:   cp sites.ini.example sites.ini", file=sys.stderr)
+            print("  Danach Schnittstelle, IP und Nennleistungen eintragen.",
+                  file=sys.stderr)
+    else:
+        known = ", ".join(cfg.sections()) or "keine"
+        print(f"  Enthalten sind: {known}", file=sys.stderr)
+    print("  Ohne Profil geht es auch, z. B.:", file=sys.stderr)
+    print("    --serial /dev/ttyRS485 --baud 9600 --unit 1", file=sys.stderr)
+    print("    --host 192.168.1.60 --port 502 --unit 1", file=sys.stderr)
+
+
 def apply_site_defaults(ap: argparse.ArgumentParser, argv: list[str] | None = None) -> bool:
     """'--site' vorab auswerten und als argparse-Defaults setzen.
 
     Dadurch gewinnt eine explizit angegebene Option immer gegen das Profil:
     das Profil liefert nur den Default, nicht den Wert.
+
+    Ein unbekanntes Profil ist ein Abbruch und keine Warnung - sonst wuerde
+    ein Tippfehler im Profilnamen stillschweigend auf der zuletzt genannten
+    Schnittstelle landen. Ausgenommen sind die Unterbefehle, die ohnehin keine
+    Verbindung aufbauen.
 
     Gibt True zurueck, wenn stattdessen nur die Profilliste gefragt war - das
     muss vor dem eigentlichen Parsen passieren, weil dabei sonst ein
@@ -123,9 +152,9 @@ def apply_site_defaults(ap: argparse.ArgumentParser, argv: list[str] | None = No
         return False
     cfg = load_sites()
     if not cfg.has_section(name):
-        known = ", ".join(cfg.sections()) or "keine"
-        print(f"Profil '{name}' steht nicht in {sites_path()} (bekannt: {known}).",
-              file=sys.stderr)
+        if any(cmd in argv for cmd in OFFLINE_COMMANDS):
+            return False
+        _missing_site(name, cfg)
         raise SystemExit(2)
     defaults = {}
     for key, value in cfg.items(name):
