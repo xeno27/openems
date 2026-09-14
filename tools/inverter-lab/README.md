@@ -231,6 +231,28 @@ Zwei Schalter fuer die verbleibenden Unbekannten:
     --ac-charge         gibt Netzladen (30410) fuer die Dauer des Tests frei
                         und stellt es danach auf den vorgefundenen Wert zurueck
 
+## Sungrow: erst finden, dann messen
+
+Der SH20T haengt nicht am RS485, sondern am Netzwerk. Wenn die IP nicht
+bekannt ist, sucht das Skript sie selbst:
+
+    python3 sungrow_lab.py scan                        # das eigene Netz
+    python3 sungrow_lab.py scan --network 192.168.1.0/24
+
+Der Suchlauf klopft nur an Port 502 an und fragt bei jeder Adresse, die
+antwortet, den Geraetetyp (Register 4999) ab - ein offener Port allein sagt
+wenig, den haben auch Waermepumpen und Gateways. Gefunden wird ausgegeben als
+
+    192.168.1.60     Sungrow SH20T, 20000 W Nennleistung
+
+Danach die Adresse in `sites.ini` unter `[sungrow]` als `host` eintragen.
+
+Zwei Eigenheiten des WiNet-Dongles, die Zeit kosten koennen:
+
+* Modbus TCP muss im Dongle freigeschaltet sein.
+* Er nimmt **nur eine** TCP-Verbindung gleichzeitig an. Laeuft nebenher
+  iSolarCloud, evcc oder Home Assistant, bleibt fuer das Skript nichts uebrig.
+
 ## Wichtig vor dem ersten Schreibversuch
 
 * **Nur ein Master auf dem RS485-Bus.** Einen parallel pollenden Shine-Stick

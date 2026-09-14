@@ -17,11 +17,14 @@ Verzeichnis liegen.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import configparser
 import glob
 import inspect
+import ipaddress
 import os
 import signal
+import socket
 import sys
 import time
 from dataclasses import dataclass, field
@@ -699,3 +702,56 @@ def write_probe(bus: Bus, groups: "list[tuple[str, list[tuple[int, str]]]]") -> 
         print("  Schreiben funktioniert grundsaetzlich - die abgelehnten Adressen")
         print("  gibt es auf dieser Firmware also schlicht nicht.")
     return 0
+
+
+# --------------------------------------------------------------------------
+# Geraete im Netz finden
+# --------------------------------------------------------------------------
+
+def own_network(prefix: int = 24) -> str | None:
+    """Das eigene Netz bestimmen, ohne ein Paket zu senden.
+
+    Der UDP-Socket wird nur 'verbunden', damit das Betriebssystem die Route
+    waehlt und die passende Quelladresse verraet.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("192.0.2.1", 9))          # TEST-NET-1, geht nie irgendwohin
+        address = sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
+    return str(ipaddress.ip_interface(f"{address}/{prefix}").network)
+
+
+def scan_port(network: str, port: int = 502, timeout: float = 0.4,
+              workers: int = 64) -> list[str]:
+    """Adressen im Netz suchen, die den Modbus-Port annehmen.
+
+    Nur ein TCP-Verbindungsversuch, keine Daten. Wer antwortet, wird
+    anschliessend vom aufrufenden Skript richtig identifiziert.
+    """
+    hosts = [str(h) for h in ipaddress.ip_network(network, strict=False).hosts()]
+
+    def reachable(host: str) -> str | None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            return host if sock.connect_ex((host, port)) == 0 else None
+        except OSError:
+            return None
+        finally:
+            sock.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        return [h for h in pool.map(reachable, hosts) if h]
+
+
+def add_scan_args(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--network", help="Netz zum Durchsuchen, z. B. 192.168.1.0/24 "
+                                      "(sonst das eigene)")
+    ap.add_argument("--port", dest="scan_port", type=int, default=502,
+                    help="Port, an dem der Wechselrichter lauscht")
+    ap.add_argument("--timeout", dest="scan_timeout", type=float, default=0.4,
+                    help="Wartezeit je Adresse in Sekunden")

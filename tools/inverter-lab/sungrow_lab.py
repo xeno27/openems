@@ -28,9 +28,10 @@ import argparse
 import sys
 
 from modbuslab import (
-    HOLDING, INPUT, Bus, Plan, add_connection_args, add_site_args, add_write_args,
-    apply_site_defaults, check_identity, connect, dump_registers, environment_info, heading,
-    percent_of, run_controlled, s16, s32_lo, scale, table, u32_lo,
+    HOLDING, INPUT, Bus, ModbusTcpClient, Plan, add_connection_args, add_scan_args,
+    add_site_args, add_write_args, apply_site_defaults, check_identity, connect,
+    dump_registers, environment_info, heading, own_network, percent_of, run_controlled,
+    s16, s32_lo, scale, scan_port, table, u32_lo,
 )
 
 CMD_CHARGE = 0xAA
@@ -151,6 +152,58 @@ def identity(bus: Bus) -> str | None:
     nominal = bus.read_one(INPUT, 5000)
     return (f"Sungrow {name or f'Typ 0x{dtc:X}'}"
             + (f", {nominal * 100} W Nennleistung" if nominal else ""))
+
+
+def cmd_scan(args) -> int:
+    """Den Wechselrichter im Netz suchen.
+
+    Zuerst alle Adressen, die den Modbus-Port annehmen, dann bei jeder
+    nachfragen, ob dort wirklich ein Sungrow antwortet. Ein offener Port 502
+    allein sagt wenig - den haben auch Waermepumpen, Zaehler und Gateways.
+    """
+    network = args.network or own_network()
+    if not network:
+        print("Eigenes Netz nicht ermittelbar. Bitte '--network 192.168.1.0/24' angeben.",
+              file=sys.stderr)
+        return 2
+
+    heading(f"Suche in {network} auf Port {args.scan_port}")
+    print("  Das dauert ein paar Sekunden ...")
+    hosts = scan_port(network, args.scan_port, args.scan_timeout)
+    if not hosts:
+        print("\n  Keine Adresse nimmt den Port an.")
+        print("  Moegliche Ursachen: der Wechselrichter haengt in einem anderen Netz,")
+        print("  der WiNet-Dongle hat Modbus TCP nicht freigeschaltet, oder eine")
+        print("  Firewall blockt. Mit '--network' gezielt ein anderes Netz absuchen.")
+        return 1
+
+    heading("Gefunden")
+    found = 0
+    for host in hosts:
+        client = ModbusTcpClient(host, port=args.scan_port, timeout=2.0)
+        if not client.connect():
+            print(f"  {host:<16} Port offen, aber keine Verbindung")
+            continue
+        bus = Bus(client, args.unit)
+        name = identity(bus)
+        bus.close()
+        if name:
+            found += 1
+            print(f"  {host:<16} {name}")
+        else:
+            print(f"  {host:<16} antwortet, aber nicht wie ein Sungrow")
+
+    if found == 1:
+        heading("Naechster Schritt")
+        print("  Die Adresse in sites.ini unter [sungrow] als 'host' eintragen,")
+        print("  dann:  python3 sungrow_lab.py --site sungrow probe")
+    elif found == 0:
+        heading("Nichts Passendes dabei")
+        print("  Kein Geraet hat sich als Sungrow zu erkennen gegeben.")
+        print("  Bei WiNet-S: Modbus TCP im Dongle freischalten, und pruefen, ob")
+        print("  eine andere Verbindung (iSolarCloud, evcc, Home Assistant) den")
+        print("  einzigen erlaubten TCP-Platz belegt.")
+    return 0
 
 
 def cmd_probe(bus: Bus, args) -> int:
@@ -297,6 +350,7 @@ def main() -> int:
     add_write_args(sub.add_parser("hold", help="Entladen sperren"))
     add_write_args(sub.add_parser("reset", help="Normalbetrieb wiederherstellen"))
     sub.add_parser("selftest", help="Dekoder ohne Anlage pruefen")
+    add_scan_args(sub.add_parser("scan", help="Wechselrichter im Netz suchen"))
 
     add_site_args(ap)
     if apply_site_defaults(ap):
@@ -304,6 +358,8 @@ def main() -> int:
     args = ap.parse_args()
     if args.cmd == "selftest":
         return cmd_selftest(None, args)
+    if args.cmd == "scan":
+        return cmd_scan(args)
 
     bus = connect(args)
     bus.verbose = args.verbose
