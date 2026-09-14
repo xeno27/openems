@@ -448,6 +448,8 @@ class Plan:
     title: str
     steps: list[Step] = field(default_factory=list)
     reset_steps: list[Step] = field(default_factory=list)
+    #: ob ueberhaupt schon ein Schritt erfolgreich geschrieben wurde
+    touched: bool = False
 
     def add(self, address: int, values: int | Sequence[int], name: str, effect: str,
             once: bool = False) -> None:
@@ -479,10 +481,21 @@ class Plan:
                 print(f"    {step.address:<12} {step.name:<34} -> [{soll}]")
 
     def apply(self, bus: Bus, steps: list[Step] | None = None) -> None:
+        """Schreibt die Schritte der Reihe nach.
+
+        Bricht beim ersten Fehler ab - danach ist unklar, in welchem Zustand
+        das Geraet ist, und weiterzuschreiben macht das nicht besser. Was
+        vorher durchging, merkt sich ``touched``, damit die Rueckstellung
+        weiss, ob ueberhaupt etwas zu korrigieren ist.
+        """
         for step in (self.steps if steps is None else steps):
             bus.write(step.address, step.values)
+            self.touched = True
 
     def apply_reset(self, bus: Bus) -> None:
+        if not self.touched:
+            print("  Es wurde nichts geschrieben - keine Rueckstellung noetig.")
+            return
         errors = []
         for step in self.reset_steps:
             try:
@@ -609,3 +622,50 @@ def check_identity(bus: Bus, expected: str, probe: Callable[[Bus], str | None],
     print("  Es wird nichts geschrieben. Mit 'probe' pruefen, oder --force setzen.",
           file=sys.stderr)
     return False
+
+
+# --------------------------------------------------------------------------
+# Schreibsonde
+# --------------------------------------------------------------------------
+
+def write_probe(bus: Bus, groups: "list[tuple[str, list[tuple[int, str]]]]") -> int:
+    """Prueft, welche Register das Geraet ueberhaupt beschreiben laesst.
+
+    Geschrieben wird jeweils **der gerade gelesene Wert** - der Zustand der
+    Anlage aendert sich dadurch nicht. Trotzdem kostet jeder Versuch auf einem
+    EEPROM-Register einen Schreibzyklus, deshalb ist das eine Diagnose fuer den
+    Einzelfall und nichts, was zyklisch laufen darf.
+
+    Das beantwortet die Frage, die ein fehlgeschlagener Steuerbefehl offen
+    laesst: liegt es an dieser einen Adresse, oder nimmt das Geraet ueberhaupt
+    keine Schreibzugriffe an?
+    """
+    ok = failed = skipped = 0
+    for title, addresses in groups:
+        heading(title)
+        print(f"  {'Adresse':>7}  {'gelesen':>8}  Schreibversuch")
+        for address, name in addresses:
+            current = bus.read_one(HOLDING, address)
+            if current is None:
+                print(f"  {address:>7}  {'-':>8}  nicht lesbar - uebersprungen   {name}")
+                skipped += 1
+                continue
+            try:
+                bus.write(address, [current])
+            except ModbusError as exc:
+                detail = str(exc).split(": ", 1)[-1]
+                print(f"  {address:>7}  {current:>8}  ABGELEHNT {detail}   {name}")
+                failed += 1
+            else:
+                print(f"  {address:>7}  {current:>8}  angenommen   {name}")
+                ok += 1
+    heading("Ergebnis")
+    print(f"  {ok} Register beschreibbar, {failed} abgelehnt, {skipped} nicht lesbar.")
+    if ok == 0 and failed:
+        print("  Kein einziger Schreibzugriff ging durch. Das spricht fuer eine")
+        print("  gesperrte Schreibberechtigung oder einen zweiten Master am Bus,")
+        print("  nicht fuer eine falsche Adresse.")
+    elif ok and failed:
+        print("  Schreiben funktioniert grundsaetzlich - die abgelehnten Adressen")
+        print("  gibt es auf dieser Firmware also schlicht nicht.")
+    return 0

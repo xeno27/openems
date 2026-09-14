@@ -31,7 +31,7 @@ from modbuslab import (
     HOLDING, INPUT, Bus, Plan, add_connection_args, add_site_args, add_write_args,
     apply_site_defaults, ascii_str, check_identity, connect, dump_registers, environment_info,
     heading, hhmm, looks_like_text, percent_of, run_controlled, s16, s32_hi, scale, table,
-    u32_hi,
+    u32_hi, write_probe,
 )
 
 SLOT_START = 0x0000          # 00:00
@@ -457,6 +457,66 @@ def cmd_selftest(_bus, _args) -> int:
     return 1 if failed else 0
 
 
+#: Register, die fuer die Steuerung in Frage kommen - nach Bank getrennt.
+PROBE_LEGACY = [
+    (1044, "Prioritaet (0 Load / 1 Battery / 2 Grid first)"),
+    (1070, "Grid-First Entladeleistungsrate [%]"),
+    (1071, "Grid-First Entladeschluss-SOC [%]"),
+    (1080, "Grid-First Slot 1 Start"),
+    (1081, "Grid-First Slot 1 Ende"),
+    (1082, "Grid-First Slot 1 aktiv"),
+    (1090, "Battery-First Ladeleistungsrate [%]"),
+    (1091, "Battery-First Ladeschluss-SOC [%]"),
+    (1092, "AC-Charge (Netzladen)"),
+    (1100, "Battery-First Slot 1 Start"),
+    (1101, "Battery-First Slot 1 Ende"),
+    (1102, "Battery-First Slot 1 aktiv"),
+]
+PROBE_VPP = [
+    (30407, "Remote enable"),
+    (30408, "Remote Dauer [min]"),
+    (30409, "Remote Sollwert [%]"),
+    (30410, "AC-Charge"),
+]
+#: Register, die nur gelesen werden - sie entscheiden, ob die Fernsteuerung
+#: ueberhaupt freigeschaltet ist.
+GATEKEEPERS = [
+    (30026, "BDC-Nennleistung (0 = VPP-Teil unbefuellt)"),
+    (30099, "VPP-Protokollversion"),
+    (30100, "Control authority"),
+    (30203, "EMS-Watchdog Zeit [s]"),
+    (30204, "EMS-Watchdog aktiv"),
+    (30474, "Wirksamer Sollwert [%]"),
+]
+
+
+def cmd_writeprobe(bus: Bus, args) -> int:
+    """Kartiert, welche Steuerregister das Geraet beschreiben laesst."""
+    if not check_identity(bus, "Growatt SPH", identity, args.yes, args.force):
+        return 2
+
+    heading("Torwaechter-Register (nur gelesen)")
+    print(f"  {'Adresse':>7}  {'Wert':>8}  Bedeutung")
+    for address, name in GATEKEEPERS:
+        value = bus.read_one(HOLDING, address)
+        print(f"  {address:>7}  {'-' if value is None else value:>8}  {name}")
+
+    if not args.yes:
+        heading("Trockenlauf")
+        print("  Mit '--yes' wird auf jede der folgenden Adressen der gerade")
+        print("  gelesene Wert zurueckgeschrieben. Der Zustand der Anlage aendert")
+        print("  sich dadurch nicht - es wird nur gemessen, ob das Geraet den")
+        print("  Schreibzugriff annimmt.")
+        for title, addresses in [("Legacy-Bank", PROBE_LEGACY), ("VPP-Bank", PROBE_VPP)]:
+            print(f"    {title}: " + ", ".join(str(a) for a, _ in addresses))
+        print("\n  Jeder Versuch auf einem EEPROM-Register kostet einen Schreibzyklus.")
+        print("  Das ist eine Einzelfalldiagnose, nichts fuer den Dauerbetrieb.")
+        return 0
+
+    return write_probe(bus, [("Legacy-Bank (Storage-Protokoll)", PROBE_LEGACY),
+                             ("VPP-Bank", PROBE_VPP)])
+
+
 def add_vpp_args(ap: argparse.ArgumentParser) -> None:
     """Optionen, die nur die VPP-Bank betreffen.
 
@@ -501,6 +561,8 @@ def main() -> int:
     add_write_args(p_hold)
     add_vpp_args(p_hold)
     add_write_args(sub.add_parser("reset", help="Alles auf Normalbetrieb zuruecksetzen"))
+    add_write_args(sub.add_parser(
+        "writeprobe", help="Kartieren, welche Steuerregister beschreibbar sind"))
     sub.add_parser("selftest", help="Dekoder ohne Anlage pruefen")
 
     add_site_args(ap)
@@ -533,6 +595,8 @@ def main() -> int:
             return cmd_hold(bus, args)
         if args.cmd == "reset":
             return cmd_reset(bus, args)
+        if args.cmd == "writeprobe":
+            return cmd_writeprobe(bus, args)
     except KeyboardInterrupt:
         print("\nAbgebrochen.")
         return 130

@@ -130,6 +130,7 @@ weil es gar keine Verbindung aufbaut.
 ## Bedienung (bei allen drei gleich)
 
     probe                    Was antwortet? Bewertung im Klartext
+    writeprobe               Welche Steuerregister nimmt das Geraet an?
     read                     alles dekodiert
     watch                    zyklisch
     dump holding 30000 20    Rohregister in Hex
@@ -178,6 +179,26 @@ Aussagekraeftig sind stattdessen:
 Beide brauchen keine Energiequelle. Entlaedt die Batterie gerade mit 2,4 kW
 und bleibt sie bei `hold` unveraendert dabei, ist die Fernsteuerung wirkungslos
 - das ist dann ein Befund und keine Vermutung mehr.
+
+### Wenn ein Schreibbefehl abgelehnt wird
+
+Meldet das Geraet `IllegalAddress` oder `SlaveFailure`, bricht der Plan beim
+ersten Fehler ab - danach ist unklar, in welchem Zustand die Anlage ist, und
+weiterzuschreiben macht das nicht besser. Offen bleibt dann aber die
+wichtigste Frage: liegt es an dieser einen Adresse, oder nimmt das Geraet
+ueberhaupt keine Schreibzugriffe an? Dafuer gibt es
+
+    python3 growatt_lab.py --site growatt writeprobe          # zeigt nur den Plan
+    python3 growatt_lab.py --site growatt writeprobe --yes    # misst wirklich
+
+Die Sonde schreibt auf jede Steuerungsadresse **den gerade dort gelesenen
+Wert** zurueck. Der Zustand der Anlage aendert sich dadurch nicht, gemessen
+wird nur, ob der Zugriff angenommen wird. Vorweg liest sie die Register, die
+ueber die Freigabe entscheiden (Control authority, EMS-Watchdog,
+BDC-Nennleistung, wirksamer Sollwert).
+
+Jeder Versuch auf einem EEPROM-Register kostet einen Schreibzyklus - das ist
+eine Einzelfalldiagnose und nichts fuer den Dauerbetrieb.
 
 Zwei Schalter fuer die verbleibenden Unbekannten:
 
