@@ -162,15 +162,40 @@ Beim vorletzten Schritt auf die Zeilen `VPP Sollwert [%] (30409)` und
 Sollwert zeigt, nimmt der Wechselrichter die Vorgabe zwar an, setzt sie aber
 nicht um. Genau das ist bei dieser Anlage noch offen.
 
+### Womit man die Fernsteuerung wirklich prueft
+
+Ein **Ladebefehl ist der schlechteste erste Test**. Laden braucht eine
+Energiequelle: ohne PV und ohne freigegebenes Netzladen kann der
+Wechselrichter den Befehl gar nicht ausfuehren, und das Ergebnis sieht
+genauso aus wie eine ignorierte Vorgabe. Das Skript bricht deshalb ab, wenn
+die PV unter 100 W liegt und 30410 auf 0 steht, und nennt die Alternativen.
+
+Aussagekraeftig sind stattdessen:
+
+    python3 growatt_lab.py --site growatt hold --yes --duration 60
+    python3 growatt_lab.py --site growatt discharge 1000 --yes --duration 60
+
+Beide brauchen keine Energiequelle. Entlaedt die Batterie gerade mit 2,4 kW
+und bleibt sie bei `hold` unveraendert dabei, ist die Fernsteuerung wirkungslos
+- das ist dann ein Befund und keine Vermutung mehr.
+
+Zwei Schalter fuer die verbleibenden Unbekannten:
+
+    --vpp-minutes 10    schreibt 10 statt 0 in 30408, falls die Firmware 0
+                        nicht als "unbegrenzt", sondern als "sofort abgelaufen"
+                        auslegt
+    --ac-charge         gibt Netzladen (30410) fuer die Dauer des Tests frei
+                        und stellt es danach auf den vorgefundenen Wert zurueck
+
 ## Wichtig vor dem ersten Schreibversuch
 
 * **Nur ein Master auf dem RS485-Bus.** Einen parallel pollenden Shine-Stick
   oder ein zweites Gateway vorher abziehen, sonst CRC-Fehler und
   Antwortausfaelle. Das gilt fuer Growatt und SAJ gleichermassen.
-* **Growatt Legacy-Register (1044, 1070-1102) liegen im EEPROM.** Der
-  Legacy-Pfad ist fuer kurze Tests gedacht, nicht fuer Dauerbetrieb. Die
-  VPP-Register 30407-30409 sind laut Doku "Not storage" und damit zyklisch
-  beschreibbar.
+* **Growatt Legacy-Register (1044, 1070-1102) liegen im EEPROM.** Sie werden
+  deshalb nur **einmal** geschrieben, auch wenn der Test eine Minute laeuft;
+  der Plan weist die betroffenen Adressen eigens aus. Zyklisch nachgeschrieben
+  werden nur die VPP-Register 30407-30409, die laut Doku "Not storage" sind.
 * **Growatt VPP braucht eine Bezugsleistung.** Meldet 30026 eine 0, muss sie
   ueber `reference` im Profil oder `--reference 4600` kommen. Ohne sie bricht
   das Skript ab, statt eine falsche Prozentzahl zu schreiben.

@@ -422,11 +422,18 @@ def dump_registers(bus: Bus, kind: str, start: int, count: int) -> int:
 
 @dataclass
 class Step:
-    """Ein geplanter Schreibvorgang."""
+    """Ein geplanter Schreibvorgang.
+
+    ``once`` markiert Register, die nur einmal beschrieben werden duerfen -
+    alles, was im EEPROM landet (Growatt-Prioritaeten, Zeitslots, AC-Charge).
+    Fluechtige Sollwerte werden dagegen zyklisch nachgeschrieben, damit sie
+    nicht auslaufen und ein Watchdog im Geraet gefuettert wird.
+    """
     address: int
     values: list[int]
     name: str
     effect: str
+    once: bool = False
 
     def describe(self, current: list[int | None]) -> str:
         ist = ", ".join("?" if c is None else str(c) for c in current)
@@ -442,13 +449,19 @@ class Plan:
     steps: list[Step] = field(default_factory=list)
     reset_steps: list[Step] = field(default_factory=list)
 
-    def add(self, address: int, values: int | Sequence[int], name: str, effect: str) -> None:
+    def add(self, address: int, values: int | Sequence[int], name: str, effect: str,
+            once: bool = False) -> None:
         vals = [values] if isinstance(values, int) else list(values)
-        self.steps.append(Step(address, vals, name, effect))
+        self.steps.append(Step(address, vals, name, effect, once))
 
     def add_reset(self, address: int, values: int | Sequence[int], name: str, effect: str) -> None:
         vals = [values] if isinstance(values, int) else list(values)
         self.reset_steps.append(Step(address, vals, name, effect))
+
+    @property
+    def repeating(self) -> list[Step]:
+        """Die Schritte, die zyklisch wiederholt werden duerfen."""
+        return [step for step in self.steps if not step.once]
 
     def show(self, bus: Bus) -> None:
         heading(self.title)
@@ -456,6 +469,9 @@ class Plan:
             blk = bus.read(HOLDING, step.address, len(step.values))
             current = [None] * len(step.values) if blk is None else [blk[step.address + i] for i in range(len(step.values))]
             print(step.describe(current))
+        if any(step.once for step in self.steps):
+            print("\n  Nur einmal geschrieben (nichtfluechtiger Speicher): "
+                  + ", ".join(str(step.address) for step in self.steps if step.once))
         if self.reset_steps:
             print("\n  Rueckstellung beim Beenden:")
             for step in self.reset_steps:
@@ -522,8 +538,9 @@ def run_controlled(
             print(f"  t+{elapsed:5.1f}s")
             table(observe(bus), width=38)
             print()
-            # zyklisch nachschreiben: fluechtige Sollwerte halten, Watchdog fuettern
-            plan.apply(bus)
+            # Nur fluechtige Sollwerte nachschreiben - EEPROM-Register nicht,
+            # die wuerden bei 60 s Laufzeit sonst zwanzigmal beschrieben.
+            plan.apply(bus, plan.repeating)
             slept = 0.0
             while slept < interval and not stopping["now"]:
                 time.sleep(min(0.2, interval - slept))

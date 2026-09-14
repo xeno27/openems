@@ -263,24 +263,40 @@ def observe(bus: Bus) -> list[tuple[str, object]]:
         ("PV [W]", legacy.get("PV-Leistung [W]")),
         ("Prioritaet (118)", legacy.get("Prioritaet (gelesen 118)")),
     ]
-    blk = bus.read(HOLDING, 30407, 3)
+    blk = bus.read(HOLDING, 30407, 4)
     actual = bus.read(HOLDING, 30474, 1)
     if blk or actual:
+        rows.append(("VPP Remote an (30407)", blk.get(30407) if blk else None))
         rows.append(("VPP Sollwert [%] (30409)", s16(blk.get(30409)) if blk else None))
+        rows.append(("VPP AC-Charge (30410)", blk.get(30410) if blk else None))
         rows.append(("VPP wirksam [%] (30474)", s16(actual.get(30474)) if actual else None))
+    state = bus.read(INPUT, 31000, 3)
+    if state:
+        rows.append(("VPP Zustand (31000)", VPP_WORK_STATE.get(state.get(31000), state.get(31000))))
+        rows.append(("VPP Batterie (31001)",
+                     VPP_BATTERY_STATE.get(state.get(31001), state.get(31001))))
+        rows.append(("VPP Prioritaet (31002)", PRIORITY.get(state.get(31002), state.get(31002))))
     return rows
 
 
-def build_plan_vpp(watt: float, charging: bool, reference: float) -> Plan:
+def build_plan_vpp(watt: float, charging: bool, reference: float,
+                   minutes: int = 0, ac_charge: int | None = None) -> Plan:
     percent = percent_of(watt if charging else -watt, reference)
     what = "Laden" if charging else "Entladen"
     plan = Plan(f"Plan: {what} mit {watt:.0f} W ueber die VPP-Bank "
                 f"({percent:+d} % von {reference:.0f} W Bezugsleistung)")
     # 30407..30409 liegen zusammenhaengend und sind laut Doku nicht im EEPROM
-    plan.add(30407, [1, 0, percent & 0xFFFF],
+    dauer = "unbegrenzt" if minutes == 0 else f"{minutes} min"
+    plan.add(30407, [1, minutes, percent & 0xFFFF],
              "Remote enable / Dauer / Sollwert",
-             f"Fernsteuerung an, unbegrenzt, {percent:+d} % "
+             f"Fernsteuerung an, {dauer}, {percent:+d} % "
              f"({'positiv = laden' if charging else 'negativ = entladen'})")
+    if ac_charge is not None:
+        # 30410 ist eine Einstellung, kein Sollwert - deshalb nur einmal schreiben
+        plan.add(30410, 1, "AC-Charge (30410)",
+                 "Laden aus dem Netz erlaubt", once=True)
+        plan.add_reset(30410, ac_charge, "AC-Charge (30410)",
+                       f"zurueck auf den vorgefundenen Wert {ac_charge}")
     plan.add_reset(30407, [0, 0, 0], "Remote enable / Dauer / Sollwert",
                    "Fernsteuerung aus, Wechselrichter regelt wieder selbst")
     return plan
@@ -292,10 +308,12 @@ def build_plan_legacy(watt: float, charging: bool, reference: float) -> Plan:
         plan = Plan(f"Plan: Laden mit {watt:.0f} W ueber Battery-First "
                     f"({percent} % von {reference:.0f} W)")
         plan.add(1100, [SLOT_START, SLOT_STOP, 1], "Battery-First Slot 1",
-                 "Zeitfenster 00:00-23:59 aktiv - Slot 1 ist damit fuer den Test belegt")
-        plan.add(1090, percent, "Battery-First Ladeleistungsrate", f"{percent} % Ladeleistung")
-        plan.add(1092, 1, "AC-Charge", "Laden aus dem Netz erlaubt")
-        plan.add(1044, 1, "Prioritaet", "Battery first")
+                 "Zeitfenster 00:00-23:59 aktiv - Slot 1 ist damit fuer den Test belegt",
+                 once=True)
+        plan.add(1090, percent, "Battery-First Ladeleistungsrate",
+                 f"{percent} % Ladeleistung", once=True)
+        plan.add(1092, 1, "AC-Charge", "Laden aus dem Netz erlaubt", once=True)
+        plan.add(1044, 1, "Prioritaet", "Battery first", once=True)
         plan.add_reset(1102, 0, "Battery-First Slot 1 aus", "Zeitfenster deaktiviert")
         plan.add_reset(1092, 0, "AC-Charge aus", "Kein Netzladen mehr")
         plan.add_reset(1044, 0, "Prioritaet", "Load first (Normalbetrieb)")
@@ -303,12 +321,51 @@ def build_plan_legacy(watt: float, charging: bool, reference: float) -> Plan:
         plan = Plan(f"Plan: Entladen mit {watt:.0f} W ueber Grid-First "
                     f"({percent} % von {reference:.0f} W)")
         plan.add(1080, [SLOT_START, SLOT_STOP, 1], "Grid-First Slot 1",
-                 "Zeitfenster 00:00-23:59 aktiv - Slot 1 ist damit fuer den Test belegt")
-        plan.add(1070, percent, "Grid-First Entladeleistungsrate", f"{percent} % Entladeleistung")
-        plan.add(1044, 2, "Prioritaet", "Grid first")
+                 "Zeitfenster 00:00-23:59 aktiv - Slot 1 ist damit fuer den Test belegt",
+                 once=True)
+        plan.add(1070, percent, "Grid-First Entladeleistungsrate",
+                 f"{percent} % Entladeleistung", once=True)
+        plan.add(1044, 2, "Prioritaet", "Grid first", once=True)
         plan.add_reset(1082, 0, "Grid-First Slot 1 aus", "Zeitfenster deaktiviert")
         plan.add_reset(1044, 0, "Prioritaet", "Load first (Normalbetrieb)")
     return plan
+
+
+def check_charge_source(bus: Bus, allow_ac_charge: bool):
+    """Hat der Wechselrichter ueberhaupt Energie zum Laden?
+
+    Ein Ladebefehl bei PV = 0 und abgeschaltetem Netzladen ist physikalisch
+    nicht erfuellbar. Das sieht im Protokoll aus wie eine ignorierte Vorgabe -
+    obwohl die Fernsteuerung einwandfrei funktionieren kann. Deshalb vorher
+    pruefen und, wenn noetig, mit --ac-charge das Netzladen freigeben.
+
+    Rueckgabe: der vorgefundene Wert von 30410 (fuer die Rueckstellung),
+    None wenn nichts zu tun ist, oder False als Abbruch.
+    """
+    pv = bus.read(INPUT, 1, 2)
+    pv_watt = (scale(u32_hi(pv, 1), 0.1) or 0.0) if pv else 0.0
+    ac = bus.read_one(HOLDING, 30410)
+
+    if pv_watt > 100:
+        return None
+    if ac:
+        print(f"\n  PV liefert {pv_watt:.0f} W, Netzladen ist bereits an (30410 = {ac}).")
+        return None
+    if allow_ac_charge:
+        print(f"\n  PV liefert {pv_watt:.0f} W. Netzladen wird fuer diesen Test"
+              f"\n  freigegeben (30410: {ac} -> 1) und danach zurueckgestellt.")
+        return 0 if ac is None else ac
+
+    print(f"\n  Abbruch: PV liefert {pv_watt:.0f} W und Netzladen ist aus "
+          f"(30410 = {ac}).", file=sys.stderr)
+    print("  Der Wechselrichter hat damit keine Energiequelle zum Laden - ein", file=sys.stderr)
+    print("  Ladebefehl bliebe wirkungslos, ohne dass das etwas ueber die", file=sys.stderr)
+    print("  Fernsteuerung aussagt.", file=sys.stderr)
+    print("  Entweder bei Sonne testen, oder mit '--ac-charge' das Netzladen", file=sys.stderr)
+    print("  fuer die Dauer des Tests freigeben, oder - am aussagekraeftigsten -", file=sys.stderr)
+    print("  stattdessen 'hold' bzw. 'discharge' verwenden: dafuer braucht es", file=sys.stderr)
+    print("  keine Energiequelle.", file=sys.stderr)
+    return False
 
 
 def cmd_power(bus: Bus, args, charging: bool) -> int:
@@ -328,12 +385,18 @@ def cmd_power(bus: Bus, args, charging: bool) -> int:
             print("  Bitte '--reference <Watt>' angeben, z. B. die Nennleistung der Batterie.",
                   file=sys.stderr)
             return 2
-        plan = build_plan_vpp(args.watt, charging, reference)
+        ac_charge = None
+        if charging:
+            ac_charge = check_charge_source(bus, args.ac_charge)
+            if ac_charge is False:
+                return 2
+        plan = build_plan_vpp(args.watt, charging, reference,
+                              int(args.vpp_minutes), ac_charge or None)
     else:
         reference = args.reference or 4600.0
         plan = build_plan_legacy(args.watt, charging, reference)
-        print("\n  Hinweis: die Legacy-Register liegen im EEPROM. Dieser Test schreibt"
-              "\n  sie zyklisch - nur kurz laufen lassen, nicht im Dauerbetrieb.")
+        print("\n  Hinweis: die Legacy-Register liegen im EEPROM. Sie werden deshalb"
+              "\n  nur einmal beschrieben, nicht bei jedem Durchlauf.")
 
     return run_controlled(bus, plan, args.yes, args.duration, args.interval, observe)
 
@@ -341,8 +404,11 @@ def cmd_power(bus: Bus, args, charging: bool) -> int:
 def cmd_hold(bus: Bus, args) -> int:
     if not check_identity(bus, "Growatt SPH", identity, args.yes, args.force):
         return 2
+    minutes = int(getattr(args, "vpp_minutes", 0))
+    dauer = "unbegrenzt" if minutes == 0 else f"{minutes} min"
     plan = Plan("Plan: Batterie anhalten (Sollwert 0)")
-    plan.add(30407, [1, 0, 0], "Remote enable / Dauer / Sollwert", "Fernsteuerung an, 0 % Leistung")
+    plan.add(30407, [1, minutes, 0], "Remote enable / Dauer / Sollwert",
+             f"Fernsteuerung an, {dauer}, 0 % Leistung")
     plan.add_reset(30407, [0, 0, 0], "Remote enable / Dauer / Sollwert", "Fernsteuerung aus")
     return run_controlled(bus, plan, args.yes, args.duration, args.interval, observe)
 
@@ -391,6 +457,22 @@ def cmd_selftest(_bus, _args) -> int:
     return 1 if failed else 0
 
 
+def add_vpp_args(ap: argparse.ArgumentParser) -> None:
+    """Optionen, die nur die VPP-Bank betreffen.
+
+    Sie haengen am Unterbefehl und nicht an der Hauptebene, damit
+    'charge 500 --ac-charge' funktioniert - argparse verlangt Hauptoptionen
+    sonst vor dem Unterbefehl, und so tippt das niemand.
+    """
+    g = ap.add_argument_group("VPP-Bank")
+    g.add_argument("--vpp-minutes", type=int, default=0,
+                   help="Dauer in Register 30408: 0 = unbegrenzt (Vorgabe). Falls die "
+                        "Anlage 0 als 'sofort abgelaufen' auslegt, hier z. B. 10 setzen")
+    g.add_argument("--ac-charge", action="store_true",
+                   help="Netzladen (30410) fuer die Dauer des Tests freigeben - noetig, "
+                        "um ohne PV laden zu koennen")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -414,7 +496,10 @@ def main() -> int:
         p = sub.add_parser(name, help=helptext)
         p.add_argument("watt", type=float)
         add_write_args(p)
-    add_write_args(sub.add_parser("hold", help="Batterie auf 0 W halten"))
+        add_vpp_args(p)
+    p_hold = sub.add_parser("hold", help="Batterie auf 0 W halten")
+    add_write_args(p_hold)
+    add_vpp_args(p_hold)
     add_write_args(sub.add_parser("reset", help="Alles auf Normalbetrieb zuruecksetzen"))
     sub.add_parser("selftest", help="Dekoder ohne Anlage pruefen")
 
