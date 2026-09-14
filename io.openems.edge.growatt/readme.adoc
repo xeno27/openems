@@ -203,4 +203,24 @@ All further addresses are taken from the Growatt Inverter Modbus RTU
 Protocol_II (storage section) and should be verified against the protocol
 document of the concrete device series before productive use.
 
+== Measured on a SPH4600 (device type code 3501)
+
+`tools/inverter-lab/growatt_lab.py writeprobe` wrote back the value it had just
+read on every control register. Fifteen of sixteen were accepted. The one
+exception is **1082**, the Grid-First slot enable flag, which answers 'Illegal
+Data Address' while its Battery-First counterpart 1102 works. Writing the slot
+as one block of 1080 to 1082 made the inverter reject the whole block with
+'Slave Device Failure', taking the start and stop times down with it, which is
+why the enable flags now sit in write tasks of their own.
+
+Two further observations from the same plant:
+
+- 1101 already held 5947 (23:59), so the all-day Battery-First window was
+  configured before OpenEMS ever touched it. Writing a register that already
+  holds the target value is wasted EEPROM endurance.
+- 1070 and 1090 both read 100, so the power rates were not derated.
+
+Treat this as one firmware's behaviour, not as the series' specification: run
+the write probe on a new plant before relying on a register.
+
 https://github.com/OpenEMS/openems/tree/develop/io.openems.edge.growatt[Source Code icon:github[]]
