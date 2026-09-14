@@ -242,22 +242,48 @@ def cmd_read(bus: Bus, args) -> int:
     return 0
 
 
+def current_limits(bus: Bus) -> tuple[int, int]:
+    """Die eingestellten Lade-/Entladegrenzen 33046/33047, roh in 0,01 kW.
+
+    Diese Werte sind Anlagenparameter, keine Sollwerte: die Entladegrenze
+    entspricht oft dem genehmigten Netzanschluss. Sie werden deshalb gelesen,
+    beim Beenden exakt so wiederhergestellt, und nur angehoben, wenn der
+    gewuenschte Sollwert sonst gar nicht erreichbar waere.
+    """
+    blk = bus.read(HOLDING, 33046, 2)
+    if not blk:
+        nominal = nominal_limits(bus, None)
+        return nominal, nominal
+    return blk[33046], blk[33047]
+
+
 def build_plan(bus: Bus, watt: float, charging: bool, args) -> Plan:
-    nominal = nominal_limits(bus, args.reference)
     power = max(0, round(watt))
     what = "Laden" if charging else "Entladen"
     cmd = CMD_CHARGE if charging else CMD_DISCHARGE
+    charge_limit, discharge_limit = current_limits(bus)
+    needed = max(1, -(-power // 10))          # W -> 0,01 kW, aufgerundet
 
     plan = Plan(f"Plan: {what} mit {power} W (Forced Mode)")
-    plan.add(13049, 2, "EMS-Mode", "Forced Mode - der Wechselrichter folgt dem Sollwert")
-    plan.add(13050, cmd, "Lade-/Entladebefehl", f"0x{cmd:02X} = {what}")
-    plan.add(33046, [nominal, nominal], "Max. Lade-/Entladeleistung",
-             f"Grenzen auf Nennwert ({nominal * 10} W) setzen")
-    plan.add(13051, power, "Forced-Leistung", f"{power} W")
+    plan.add(13049, 2, "EMS-Mode", "Forced Mode - der Wechselrichter folgt dem Sollwert",
+             once=True)
+    plan.add(13050, cmd, "Lade-/Entladebefehl", f"0x{cmd:02X} = {what}", once=True)
 
+    # Die Grenze nur anfassen, wenn sie den Sollwert sonst abschneiden wuerde.
+    limit_address = 33046 if charging else 33047
+    limit_now = charge_limit if charging else discharge_limit
+    if needed > limit_now:
+        plan.add(limit_address, needed,
+                 f"Max. {what}leistung ({limit_address})",
+                 f"angehoben von {limit_now * 10} W auf {needed * 10} W - "
+                 f"der Sollwert waere sonst begrenzt", once=True)
+        plan.add_reset(limit_address, limit_now,
+                       f"Max. {what}leistung ({limit_address})",
+                       f"zurueck auf den vorgefundenen Wert {limit_now * 10} W")
+
+    plan.add(13051, power, "Forced-Leistung", f"{power} W")
     plan.add_reset(13050, CMD_STOP, "Lade-/Entladebefehl", "0xCC = Stopp")
     plan.add_reset(13049, 0, "EMS-Mode", "Eigenverbrauch")
-    plan.add_reset(33046, [nominal, nominal], "Max. Lade-/Entladeleistung", "Nennwerte")
     return plan
 
 
@@ -269,30 +295,47 @@ def cmd_power(bus: Bus, args, charging: bool) -> int:
 
 
 def cmd_hold(bus: Bus, args) -> int:
+    """Entladen sperren, Laden erlaubt - die evcc-Sequenz fuer 'Halten'."""
     if not check_identity(bus, "Sungrow SH", identity, args.yes, args.force):
         return 2
-    """Entladen sperren, Laden erlaubt - die evcc-Sequenz fuer 'Halten'."""
-    nominal = nominal_limits(bus, args.reference)
+    charge_limit, discharge_limit = current_limits(bus)
     plan = Plan("Plan: Entladen sperren (Halten)")
-    plan.add(13049, 0, "EMS-Mode", "Eigenverbrauch")
-    plan.add(13050, CMD_STOP, "Lade-/Entladebefehl", "0xCC = Stopp")
-    plan.add(33046, [nominal, 1], "Max. Lade-/Entladeleistung",
-             "Laden auf Nennwert, Entladen auf 10 W - das wirkt als Entladesperre")
-    plan.add_reset(33046, [nominal, nominal], "Max. Lade-/Entladeleistung", "Nennwerte")
+    plan.add(13049, 0, "EMS-Mode", "Eigenverbrauch", once=True)
+    plan.add(13050, CMD_STOP, "Lade-/Entladebefehl", "0xCC = Stopp", once=True)
+    plan.add(33047, 1, "Max. Entladeleistung (33047)",
+             f"von {discharge_limit * 10} W auf 10 W - das wirkt als Entladesperre. "
+             f"Die Ladegrenze ({charge_limit * 10} W) bleibt unangetastet.", once=True)
+    plan.add_reset(33047, discharge_limit, "Max. Entladeleistung (33047)",
+                   f"zurueck auf den vorgefundenen Wert {discharge_limit * 10} W")
     plan.add_reset(13050, CMD_STOP, "Lade-/Entladebefehl", "0xCC = Stopp")
     plan.add_reset(13049, 0, "EMS-Mode", "Eigenverbrauch")
     return run_controlled(bus, plan, args.yes, args.duration, args.interval, observe)
 
 
 def cmd_reset(bus: Bus, args) -> int:
+    """Aus dem Forced Mode heraus, ohne die Anlagenparameter zu ueberschreiben."""
     if not check_identity(bus, "Sungrow SH", identity, args.yes, args.force):
         return 2
+    charge_limit, discharge_limit = current_limits(bus)
     nominal = nominal_limits(bus, args.reference)
+
     plan = Plan("Plan: Normalbetrieb wiederherstellen")
-    plan.add(13050, CMD_STOP, "Lade-/Entladebefehl", "0xCC = Stopp")
-    plan.add(13049, 0, "EMS-Mode", "Eigenverbrauch")
-    plan.add(33046, [nominal, nominal], "Max. Lade-/Entladeleistung",
-             f"Nennwerte ({nominal * 10} W)")
+    plan.add(13050, CMD_STOP, "Lade-/Entladebefehl", "0xCC = Stopp", once=True)
+    plan.add(13049, 0, "EMS-Mode", "Eigenverbrauch", once=True)
+
+    # Eine Grenze nur dann anheben, wenn sie so niedrig steht, dass sie aus
+    # einem abgebrochenen Testlauf stammen muss. Sonst ist sie ein bewusst
+    # gesetzter Anlagenparameter - oft der genehmigte Netzanschluss.
+    for address, value, name in [(33046, charge_limit, "Ladeleistung"),
+                                 (33047, discharge_limit, "Entladeleistung")]:
+        if value < 10:
+            plan.add(address, nominal, f"Max. {name} ({address})",
+                     f"steht auf {value * 10} W - das sieht nach einem "
+                     f"haengengebliebenen Test aus, zurueck auf {nominal * 10} W",
+                     once=True)
+        else:
+            print(f"  {address} steht auf {value * 10} W und bleibt unveraendert.")
+
     plan.show(bus)
     if not args.yes:
         print("\n  Trockenlauf: es wurde nichts geschrieben. Mit '--yes' ausfuehren.")
