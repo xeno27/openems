@@ -28,9 +28,9 @@ import argparse
 import sys
 
 from modbuslab import (
-    HOLDING, INPUT, Bus, Plan, add_connection_args, add_write_args, ascii_str, connect,
-    add_site_args, apply_site_defaults, check_identity, dump_registers, heading, hhmm,
-    looks_like_text, percent_of, run_controlled, s16, s32_hi, scale, table,
+    HOLDING, INPUT, Bus, Plan, add_connection_args, add_site_args, add_write_args,
+    apply_site_defaults, ascii_str, check_identity, connect, dump_registers, environment_info,
+    heading, hhmm, looks_like_text, percent_of, run_controlled, s16, s32_hi, scale, table,
     u32_hi,
 )
 
@@ -187,6 +187,7 @@ def identity(bus: Bus) -> str | None:
 
 def cmd_probe(bus: Bus, args) -> int:
     heading("Verbindung")
+    print(f"  {environment_info()}")
     dtc_legacy = bus.read_one(HOLDING, 43)
     soc = bus.read_one(INPUT, 1014)
     table([

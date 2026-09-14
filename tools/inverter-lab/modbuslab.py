@@ -27,10 +27,35 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Sequence
 
-from pymodbus.client import ModbusSerialClient, ModbusTcpClient
-
 HOLDING = "holding"
 INPUT = "input"
+
+
+# --------------------------------------------------------------------------
+# pymodbus 2.x und 3.x
+# --------------------------------------------------------------------------
+#
+# Auf aelteren Images (z. B. Revolution Pi mit Debian Buster) steckt pymodbus
+# 2.5.3, auf aktuellen 3.x. Die beiden unterscheiden sich an drei Stellen:
+#
+#   Importpfad     2.x: pymodbus.client.sync     3.x: pymodbus.client
+#   RTU-Framer     2.x: method="rtu" noetig      3.x: Parameter entfaellt
+#   Geraeteadresse 2.x: unit=   3.0-3.6: slave=   ab 3.7: device_id=
+#
+# Alles andere, was hier benutzt wird (connect, read_*_registers, .registers,
+# write_registers, isError), verhaelt sich in beiden Reihen gleich.
+
+try:
+    from pymodbus.client import ModbusSerialClient, ModbusTcpClient
+except ImportError:  # pymodbus 2.x
+    from pymodbus.client.sync import ModbusSerialClient, ModbusTcpClient
+
+try:
+    from pymodbus import __version__ as PYMODBUS_VERSION
+except ImportError:
+    PYMODBUS_VERSION = "unbekannt"
+
+PYMODBUS_MAJOR = int(PYMODBUS_VERSION.split(".")[0]) if PYMODBUS_VERSION[:1].isdigit() else 3
 
 
 # --------------------------------------------------------------------------
@@ -137,6 +162,16 @@ def add_connection_args(ap: argparse.ArgumentParser) -> None:
     g.add_argument("--timeout", type=float, default=3.0)
 
 
+def environment_info() -> str:
+    """Welche Python- und pymodbus-Version laeuft hier gerade?
+
+    Gehoert in jede probe-Ausgabe: bei einer Fehlersuche aus der Ferne ist das
+    meist die erste Frage.
+    """
+    py = ".".join(str(n) for n in sys.version_info[:3])
+    return f"Python {py}, pymodbus {PYMODBUS_VERSION}"
+
+
 def serial_candidates() -> list[str]:
     """Serielle Schnittstellen, die auf diesem Rechner existieren.
 
@@ -166,7 +201,7 @@ def connect(args) -> "Bus":
     client = (
         ModbusTcpClient(args.host, port=args.port, timeout=args.timeout)
         if args.host
-        else ModbusSerialClient(port=args.serial, baudrate=args.baud, timeout=args.timeout)
+        else _serial_client(args.serial, args.baud, args.timeout)
     )
     if not client.connect():
         where = args.host or args.serial
@@ -176,8 +211,29 @@ def connect(args) -> "Bus":
 
 
 def _unit_kw(func) -> str:
-    """pymodbus hat 'slave' in 'device_id' umbenannt - beide Varianten stuetzen."""
-    return "device_id" if "device_id" in inspect.signature(func).parameters else "slave"
+    """Wie heisst der Parameter fuer die Modbus-Adresse in dieser pymodbus-Reihe?
+
+    3.7+ nennt ihn 'device_id', 3.0-3.6 'slave', 2.x 'unit'. In 2.x steht er
+    nicht in der Signatur, sondern wird ueber **kwargs durchgereicht - deshalb
+    der Rueckfall auf die Hauptversion.
+    """
+    params = inspect.signature(func).parameters
+    for name in ("device_id", "slave", "unit"):
+        if name in params:
+            return name
+    return "unit" if PYMODBUS_MAJOR < 3 else "slave"
+
+
+def _serial_client(port: str, baudrate: int, timeout: float):
+    """Seriellen Client bauen - in pymodbus 2.x ist method='rtu' Pflicht.
+
+    Die Vorgabe dort ist 'ascii'; ohne diesen Parameter antwortet kein
+    RTU-Geraet, ohne dass ein aussagekraeftiger Fehler kommt.
+    """
+    kwargs = {"port": port, "baudrate": baudrate, "timeout": timeout}
+    if "method" in inspect.signature(ModbusSerialClient.__init__).parameters:
+        kwargs["method"] = "rtu"
+    return ModbusSerialClient(**kwargs)
 
 
 class ModbusError(Exception):

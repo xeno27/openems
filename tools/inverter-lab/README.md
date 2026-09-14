@@ -24,10 +24,35 @@ aus pruefen lassen - bevor OpenEMS ins Spiel kommt.
 5. **`selftest` laeuft ohne Anlage** und prueft die Dekoder (Wortreihenfolge,
    Vorzeichen, Skalierung).
 
-## Installation auf dem Revolution Pi
+## Voraussetzungen
 
-RevPi laeuft auf Debian; seit Bookworm laesst sich `pip` nicht mehr direkt in
-das System installieren. Deshalb entweder das Systempaket nehmen
+Python ab 3.7 und pymodbus - **sowohl die alte 2.x-Reihe als auch 3.x**. Die
+Skripte erkennen selbst, welche installiert ist, und stellen sich darauf ein.
+`probe` gibt beide Versionen gleich in der ersten Zeile aus:
+
+    Verbindung
+    ----------
+      Python 3.8.20, pymodbus 2.5.3
+
+Das ist bei einer Fehlersuche aus der Ferne meist die erste Frage.
+
+### Altes Image (Debian Buster, pymodbus 2.5.3)
+
+Dort ist meist schon alles da:
+
+    python3 -c "import pymodbus; print(pymodbus.__version__)"
+
+Fehlt es, reicht auf Buster noch die direkte Installation:
+
+    sudo pip3 install 'pymodbus==2.5.3' pyserial
+
+Ein Upgrade auf pymodbus 3.x ist **nicht** noetig - und auf Python 3.7 auch
+gar nicht moeglich, denn pymodbus 3.x setzt Python 3.8 voraus.
+
+### Neues Image (Bookworm oder neuer)
+
+Seit Bookworm laesst sich `pip` nicht mehr direkt in das System installieren.
+Deshalb entweder das Systempaket nehmen
 
     sudo apt install python3-pymodbus
 
@@ -37,9 +62,26 @@ oder eine eigene Umgebung anlegen:
     ~/labenv/bin/pip install pymodbus
     ~/labenv/bin/python growatt_lab.py --site growatt probe
 
+### In beiden Faellen
+
 Der Benutzer braucht Zugriff auf die serielle Schnittstelle:
 
     sudo usermod -aG dialout $USER     # danach neu anmelden
+
+### Was sich zwischen den pymodbus-Reihen unterscheidet
+
+Wer eigenen Code danebenstellt, sollte die drei Stolperstellen kennen - die
+Skripte fangen sie in `modbuslab.py` ab:
+
+| | pymodbus 2.x | pymodbus 3.0-3.6 | pymodbus ab 3.7 |
+|---|---|---|---|
+| Importpfad | `pymodbus.client.sync` | `pymodbus.client` | `pymodbus.client` |
+| RTU-Framer | `method="rtu"` noetig | entfaellt | entfaellt |
+| Geraeteadresse | `unit=` | `slave=` | `device_id=` |
+
+Die erste Zeile ist die unangenehme: in pymodbus 2.x ist die Vorgabe
+`method="ascii"`. Wer sie vergisst, bekommt von einem RTU-Geraet schlicht
+keine Antwort - ohne aussagekraeftige Fehlermeldung.
 
 ## Welche Schnittstelle?
 
@@ -132,7 +174,15 @@ nicht um. Genau das ist bei dieser Anlage noch offen.
 
 ## Geprueft
 
-Alle drei Skripte wurden gegen einen Modbus-TCP-Simulator gefahren:
-Trockenlauf schreibt nichts, `--yes` schreibt den Plan, die Rueckstellung
-greift sowohl nach Ablauf der Laufzeit als auch bei Ctrl-C mitten im Lauf, und
-die Geraetepruefung verhindert einen Schreibvorgang auf die falsche Anlage.
+Alle drei Skripte wurden gegen einen Modbus-TCP-Simulator gefahren, und zwar
+auf beiden Staenden - **Python 3.8 mit pymodbus 2.5.3** und Python 3.11 mit
+pymodbus 3.15:
+
+* Trockenlauf schreibt nichts,
+* `--yes` schreibt den Plan,
+* die Rueckstellung greift nach Ablauf der Laufzeit und bei Ctrl-C mitten im
+  Lauf,
+* die Geraetepruefung verhindert einen Schreibvorgang auf die falsche Anlage,
+* die Dekoder-Selbsttests laufen auf beiden Staenden durch.
+
+Der Quelltext kommt ohne Sprachmittel aus, die neuer als Python 3.7 sind.

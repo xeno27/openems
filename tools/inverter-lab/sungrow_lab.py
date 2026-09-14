@@ -29,8 +29,8 @@ import sys
 
 from modbuslab import (
     HOLDING, INPUT, Bus, Plan, add_connection_args, add_site_args, add_write_args,
-    apply_site_defaults, check_identity, connect, dump_registers, heading, percent_of,
-    run_controlled, s16, s32_lo, scale, table, u32_lo,
+    apply_site_defaults, check_identity, connect, dump_registers, environment_info, heading,
+    percent_of, run_controlled, s16, s32_lo, scale, table, u32_lo,
 )
 
 CMD_CHARGE = 0xAA
@@ -155,6 +155,7 @@ def identity(bus: Bus) -> str | None:
 
 def cmd_probe(bus: Bus, args) -> int:
     heading("Verbindung und Identitaet")
+    print(f"  {environment_info()}")
     d = read_all(bus)
     table([(k, d.get(k)) for k in [
         "Geraetetyp (4999)", "Nennleistung [W] (5000)", "BDC-Nennleistung [W] (5627)",

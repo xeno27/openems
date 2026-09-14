@@ -32,8 +32,8 @@ import sys
 
 from modbuslab import (
     HOLDING, INPUT, Bus, Plan, add_connection_args, add_site_args, add_write_args,
-    apply_site_defaults, check_identity, connect, dump_registers, heading, run_controlled,
-    s16, s32_hi, scale, table, u32_hi,
+    apply_site_defaults, check_identity, connect, dump_registers, environment_info, heading,
+    run_controlled, s16, s32_hi, scale, table, u32_hi,
 )
 
 PER_UNIT = 10_000       # 10000 = 100 %
@@ -142,6 +142,7 @@ def identity(bus: Bus) -> str | None:
 
 def cmd_probe(bus: Bus, args) -> int:
     heading("Verbindung und Zustand")
+    print(f"  {environment_info()}")
     d = read_all(bus)
     table([(k, d.get(k)) for k in [
         "Betriebsart (0x7B04)", "Anwendungsmodus (0x7B28)", "SOC [%] (0x7B88)",
