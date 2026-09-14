@@ -23,7 +23,138 @@ Grid-Meter (`Growatt.SPH.Grid-Meter`):
 
 == Remote control
 
-The SPH inverters have no register for an absolute power Set-Point. The energy
+Two control paths are available; the `Control mode` configuration selects
+between them.
+
+=== VPP protocol (recommended)
+
+`Control mode` = `REMOTE_VPP` uses the dedicated Growatt VPP protocol (register
+bank 30000-32099, GROWATT VPP COMMUNICATION PROTOCOL OF INVERTER V2.01). It
+provides a real remote Set-Point:
+
+|===
+|Register |Name |Meaning
+
+|30407
+|Remote power control enable
+|1 overrides the time-slot schedule and self-consumption
+
+|30408
+|Remote power control charging time
+|0 = until revoked; written as 0
+
+|30409
+|Remote charge and discharge power
+|Signed percentage, *positive is charge*, negative is discharge
+
+|30474
+|Actual control value
+|Read-back of the value the inverter actually applies
+|===
+
+All three control registers are documented with a length of one and lie next to
+each other, so they are written in a single FC16 block.
+
+These three registers are explicitly *not* stored in non-volatile memory, so
+they are written in every Cycle without quantization or throttling. Note the
+inverted sign convention: OpenEMS counts positive as discharge, Growatt counts
+positive as charge.
+
+The percentage refers to the DC side of the battery. The reference power is the
+`BDC rated power` configuration; with the default 0 it is read from the
+inverter (register 30026).
+
+`Control authority` (30100) is enabled once, and the watchdog registers
+30203/30204 (`EMS failure time`) make the inverter fall back to its own
+schedule if OpenEMS stops writing.
+
+The VPP register bank additionally provides much better measurements, which are
+preferred automatically when available: AC power (31100), battery power as a
+single signed value (31200), *dynamic battery power limits from the BMS*
+(31210/31212), SOC/SOH, fault and alarm codes with sub codes.
+
+==== Verifying that the Set-Point is applied
+
+The protocol documents register 30474 as the read-back of register 30409. That
+read-back is checked in every Cycle, because a Growatt inverter acknowledges a
+write into a register bank it does not implement instead of rejecting it - the
+Set-Point would be lost silently. If 30474 does not follow 30409 for five
+Cycles, `VPP_SET_POINT_NOT_APPLIED` is raised and the Component falls back to
+the priority and time-slot control. A Set-Point of zero is not evaluated,
+because an inverter that ignores the remote control reports zero as well.
+
+==== Measured on a SPH4600 (device type code 3501)
+
+The bank answers, but only its reading half works. Registers 30407 to 30410
+accept writes and read back what was written, and the status registers 31000 to
+31002 carry live values that follow the battery. The control half does nothing:
+with 30409 set to +11 % the battery kept discharging at 2.4 kW, and 30474 never
+left zero. The whole unlock area reads zero as well - 30026 (BDC rated power),
+30099, 30100 and 30203/30204 - so the firmware ships the monitoring part of the
+VPP protocol without the dispatch part.
+
+This is what the read-back check is for, and the plant confirms both halves of
+its design: a write into an unimplemented bank is acknowledged rather than
+rejected, so only 30474 reveals the loss of control, and the Component falls
+back to priority and time-slot control on its own. It also confirms why a
+Set-Point of zero is excluded from the check: an inverter that ignores the
+remote control reports zero in 30474, which is exactly what a correctly applied
+zero looks like.
+
+A plant like this is configured with `Control mode` = `REMOTE`; leaving it on
+`REMOTE_VPP` costs the probe and the five read-back Cycles before the fallback
+takes over, and ends up in the same place. `BDC rated power` has to be set by
+hand either way, because 30026 reports zero.
+
+==== Availability and fallback
+
+The VPP register bank only exists on firmware that implements the protocol. The
+Component probes it with register 30000 (equipment type code): it is the first
+register of the bank and documented as a single register, so the probe cannot
+fail because of a partial read of a multi-register group. The probe gives up
+after five consecutive errors and is restarted whenever the Modbus connection
+recovers. On a device without VPP support this costs a handful of failed reads
+at startup.
+
+The probe requires a plausible equipment type code: some inverters answer a read
+on the VPP register bank with zeros instead of rejecting it, and Table 3-1 of
+the protocol document has no code zero, so a zero is treated as 'no VPP'. Any
+other value is accepted on purpose - a SPH4600 in the field reports 3501, which
+is not listed in Table 3-1, so matching against that table would reject working
+devices.
+
+Note on register 30099 (VPP protocol version): it was only added with protocol
+version V2.0, while the control registers 30407-30409 exist since V1.01. Older
+firmware can therefore support VPP and still report 0 here - which is why the
+probe does not use this register. This combination has been observed in the
+field: 30000 answers with 3501 while 30099 reads 0.
+
+The same applies to the registers that are not part of V1.01: the watchdog
+registers 30203/30204 arrived with V1.03. Because the inverters answer a read on
+a register they do not implement with zero instead of rejecting it, a setting
+whose read-back never reaches the desired value cannot be told apart from a
+missing register. 'Control authority' and the watchdog are therefore written at
+most three times; afterwards the Component stops trying and raises
+`VPP_SETTINGS_NOT_APPLIED`. The Set-Point registers 30407-30409 are written
+regardless, as they exist since V1.01. Beyond that, the protocol document lists it
+with a length of 15, which cannot be right - that would reach up to 30113 and
+collide with 30100 'Control authority', 30101 'On off command' and 30104
+'System time'. The register bank is contiguous, so 30084 'Reserved' covers
+30084-30098 and 30099 is a single register. It is read in its own Task, so a
+device that rejects the read does not affect the other VPP Tasks.
+
+If `REMOTE_VPP` is configured but the inverter does not answer, the
+`VPP_NOT_AVAILABLE` warning is raised and the Component falls back to the
+priority and time-slot control described below.
+
+Supported models per the protocol document (Table 3-1) include SPH 3000-6000TL
+BL (DTC 3502) and SPH 4000-10000TL3 BH-UP (DTC 3601), i.e. both SPH4600
+variants.
+
+=== Priority and time-slot control (legacy)
+
+`Control mode` = `REMOTE` uses the storage registers of the Growatt Inverter
+Modbus RTU Protocol_II. The SPH inverters have no register for an absolute power Set-Point. The energy
 flow is controlled by the 'Priority Mode' in combination with a power rate in
 percent of the nominal battery power:
 
@@ -48,10 +179,10 @@ reserved by this implementation and is set to 00:00-23:59, so that the priority
 mode is effective the whole day. Time-slots 2 and 3 stay available for a
 schedule that is configured via ShinePhone.
 
-Remote control is only active if `Control mode` is set to `REMOTE`; with
-`INTERNAL` (the default) OpenEMS never writes a Set-Point.
+With `Control mode` = `INTERNAL` (the default) OpenEMS never writes a
+Set-Point.
 
-=== Protecting the non-volatile memory
+==== Protecting the non-volatile memory
 
 Growatt stores these settings in non-volatile memory, which wears out on cyclic
 writes. Three mechanisms keep the number of writes low:
@@ -64,15 +195,28 @@ writes. Three mechanisms keep the number of writes low:
 
 == Modbus
 
-RS485 / Modbus RTU with 9600 baud, 8N1, Unit-ID 1 by default; a Modbus-TCP
-gateway works as well. Measurements are Input-Registers (FC4), settings are
-Holding-Registers (FC3 to read, FC16 to write). 32-bit values are transmitted
-high-word first.
+RS485 / Modbus RTU with 9600 baud, 8N1, Unit-ID 1 by default. Measurements are
+Input-Registers (FC4), settings are Holding-Registers (FC3 to read, FC16 to
+write). 32-bit values are transmitted high-word first.
+
+The VPP register bank is not a separate interface: both the storage registers
+(0-124 / 1000-1124) and the VPP registers (30000-32099) are served on the same
+RS485 connection. The VPP protocol even defines the RS485 parameters itself, in
+registers 30112 (device address) and 30113 (baud rate). Whether the VPP bank
+answers is a question of firmware, not of wiring.
+
+Connect directly to RS485. A ShineMaster datalogger can act as a Modbus-TCP to
+Modbus-RTU gateway, but Growatt requires more than five seconds between two
+commands on that path, which rules it out for cycle-synchronous control.
 
 Only one Modbus master is allowed on the RS485 bus - a ShineWiFi/Shine stick
-that polls the same bus in parallel causes CRC errors and lost responses.
+that polls the same bus in parallel causes CRC errors and lost responses, which
+can also show up as registers that read zero.
 
 === Source of the register addresses
+
+The VPP register bank (30000-32099) is taken from GROWATT VPP COMMUNICATION
+PROTOCOL OF INVERTER V2.01 (2024-09-20).
 
 The following core registers are verified in the field (evcc template
 `growatt-hybrid`): Input 1, 91, 1009, 1011, 1014, 1021, 1029, 1046, 1054 and

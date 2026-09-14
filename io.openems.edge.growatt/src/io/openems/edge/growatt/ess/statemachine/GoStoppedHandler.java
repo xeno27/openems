@@ -10,6 +10,7 @@ public class GoStoppedHandler extends StateHandler<State, Context> {
 	public State runAndGetNextState(Context context) throws OpenemsNamedException {
 		final var ess = context.getParent();
 
+		ess.releaseVppControl();
 		ess.setPowerOn(false);
 
 		return switch (ess.getInverterStatus()) {

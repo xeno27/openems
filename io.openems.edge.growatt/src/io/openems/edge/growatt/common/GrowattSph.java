@@ -19,6 +19,8 @@ import io.openems.edge.growatt.common.enums.BatteryType;
 import io.openems.edge.growatt.common.enums.InverterStatus;
 import io.openems.edge.growatt.common.enums.PriorityMode;
 import io.openems.edge.growatt.common.enums.SystemWorkMode;
+import io.openems.edge.growatt.common.enums.VppBatteryWorkingState;
+import io.openems.edge.growatt.common.enums.VppWorkingState;
 import io.openems.edge.growatt.ess.statemachine.StateMachine.State;
 
 /**
@@ -115,8 +117,105 @@ public interface GrowattSph extends OpenemsComponent {
 				.accessMode(AccessMode.READ_WRITE)), //
 
 		/*
+		 * VPP protocol (register bank 30000-32099): device information.
+		 */
+		VPP_DEVICE_TYPE_CODE(Doc.of(OpenemsType.INTEGER) //
+				.text("Growatt DTC code; 3502 = SPH 3000-6000TL BL, 3601 = SPH 4000-10000TL3 BH-UP")), //
+		VPP_PROTOCOL_VERSION(Doc.of(OpenemsType.INTEGER) //
+				.text("201 represents VPP protocol V2.01")), //
+		VPP_RATED_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		VPP_MAX_ACTIVE_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		VPP_BDC_RATED_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT) //
+				.text("Rated charge/discharge power of the battery DC/DC converter; "
+						+ "reference for the remote power percentage")), //
+
+		/*
+		 * VPP protocol: remote control.
+		 */
+		VPP_CONTROL_AUTHORITY(Doc.of(OpenemsType.BOOLEAN) //
+				.accessMode(AccessMode.READ_WRITE) //
+				.text("Master switch for remote control; stored in non-volatile memory")), //
+		VPP_EMS_FAILURE_TIME(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.SECONDS) //
+				.accessMode(AccessMode.READ_WRITE) //
+				.text("Watchdog: time without EMS communication until the inverter falls back")), //
+		VPP_EMS_FAILURE_ENABLE(Doc.of(OpenemsType.BOOLEAN) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		VPP_CHARGE_CUT_OFF_SOC(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		VPP_DISCHARGE_CUT_OFF_SOC(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.accessMode(AccessMode.READ_WRITE)), //
+		VPP_REMOTE_POWER_ENABLE(Doc.of(OpenemsType.BOOLEAN) //
+				.accessMode(AccessMode.READ_WRITE) //
+				.text("Remote power control enable; not stored in non-volatile memory")), //
+		VPP_REMOTE_POWER_DURATION(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.MINUTE) //
+				.accessMode(AccessMode.READ_WRITE) //
+				.text("0 = unlimited; not stored in non-volatile memory")), //
+		VPP_REMOTE_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.accessMode(AccessMode.READ_WRITE) //
+				.text("Remote charge/discharge power; positive is charge, negative is discharge. "
+						+ "Not stored in non-volatile memory")), //
+		VPP_ACTUAL_CONTROL_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT) //
+				.text("Charge/discharge power the inverter actually applies")), //
+
+		/*
+		 * VPP protocol: measurements.
+		 */
+		VPP_WORKING_STATE(Doc.of(VppWorkingState.values()) //
+				.persistencePriority(PersistencePriority.HIGH)), //
+		VPP_BATTERY_WORKING_STATE(Doc.of(VppBatteryWorkingState.values())), //
+		VPP_PRIORITY(Doc.of(PriorityMode.values())), //
+		VPP_FAULT_CODE(Doc.of(OpenemsType.INTEGER)), //
+		VPP_FAULT_SUB_CODE(Doc.of(OpenemsType.INTEGER)), //
+		VPP_ALARM_CODE(Doc.of(OpenemsType.INTEGER)), //
+		VPP_ALARM_SUB_CODE(Doc.of(OpenemsType.INTEGER)), //
+		VPP_PV_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		VPP_AC_ACTIVE_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT) //
+				.text("AC power of the inverter; positive is export to grid")), //
+		VPP_AC_REACTIVE_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.VOLT_AMPERE_REACTIVE)), //
+		VPP_INVERTER_TEMPERATURE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.DEGREE_CELSIUS)), //
+		VPP_BATTERY_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT) //
+				.text("Battery power; positive is charge, negative is discharge")), //
+		VPP_BATTERY_MAX_CHARGE_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		VPP_BATTERY_MAX_DISCHARGE_POWER(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.WATT)), //
+		VPP_BATTERY_VOLTAGE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.MILLIVOLT)), //
+		VPP_BATTERY_CURRENT(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.MILLIAMPERE) //
+				.text("Battery current; positive is charge, negative is discharge")), //
+		VPP_BATTERY_STATE_OF_HEALTH(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.PERCENT)), //
+		VPP_BATTERY_TEMPERATURE(Doc.of(OpenemsType.INTEGER) //
+				.unit(Unit.DEGREE_CELSIUS)), //
+
+		/*
 		 * State-Channels.
 		 */
+		VPP_SET_POINT_NOT_APPLIED(Doc.of(Level.WARNING) //
+				.text("The inverter does not apply the VPP Set-Point: register 30474 does not follow "
+						+ "register 30409. Falling back to the priority and time-slot control.")), //
+		VPP_SETTINGS_NOT_APPLIED(Doc.of(Level.WARNING) //
+				.text("The inverter did not accept 'Control authority' or the EMS watchdog registers. "
+						+ "Those registers were added in later versions of the VPP protocol; the "
+						+ "Set-Point itself is unaffected.")), //
+		VPP_NOT_AVAILABLE(Doc.of(Level.WARNING) //
+				.text("Control mode REMOTE_VPP is configured, but the inverter does not answer on the "
+						+ "VPP register bank. Falling back to the priority and time-slot control.")), //
 		STATE_MACHINE(Doc.of(State.values()) //
 				.text("Current State of State-Machine")), //
 		RUN_FAILED(Doc.of(Level.FAULT) //
@@ -273,6 +372,60 @@ public interface GrowattSph extends OpenemsComponent {
 	 */
 	public default InverterStatus getInverterStatus() {
 		return this.getInverterStatusChannel().value().asEnum();
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#VPP_REMOTE_POWER_ENABLE}.
+	 *
+	 * @return the Channel
+	 */
+	public default BooleanWriteChannel getVppRemotePowerEnableChannel() {
+		return this.channel(ChannelId.VPP_REMOTE_POWER_ENABLE);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#VPP_REMOTE_POWER_DURATION}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerWriteChannel getVppRemotePowerDurationChannel() {
+		return this.channel(ChannelId.VPP_REMOTE_POWER_DURATION);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#VPP_REMOTE_POWER}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerWriteChannel getVppRemotePowerChannel() {
+		return this.channel(ChannelId.VPP_REMOTE_POWER);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#VPP_CONTROL_AUTHORITY}.
+	 *
+	 * @return the Channel
+	 */
+	public default BooleanWriteChannel getVppControlAuthorityChannel() {
+		return this.channel(ChannelId.VPP_CONTROL_AUTHORITY);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#VPP_EMS_FAILURE_TIME}.
+	 *
+	 * @return the Channel
+	 */
+	public default IntegerWriteChannel getVppEmsFailureTimeChannel() {
+		return this.channel(ChannelId.VPP_EMS_FAILURE_TIME);
+	}
+
+	/**
+	 * Gets the Channel for {@link ChannelId#VPP_EMS_FAILURE_ENABLE}.
+	 *
+	 * @return the Channel
+	 */
+	public default BooleanWriteChannel getVppEmsFailureEnableChannel() {
+		return this.channel(ChannelId.VPP_EMS_FAILURE_ENABLE);
 	}
 
 	/**
