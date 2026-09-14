@@ -549,6 +549,7 @@ def run_controlled(
     duration: float,
     interval: float,
     observe: Callable[[Bus], list[tuple[str, object]]],
+    settle: float = 8.0,
 ) -> int:
     """Plan anzeigen, auf Wunsch schreiben, Wirkung beobachten, sicher zuruecksetzen.
 
@@ -603,8 +604,31 @@ def run_controlled(
         heading("Rueckstellung")
         plan.apply_reset(bus)
         table(observe(bus), width=38)
-        print("\n  Normalbetrieb wiederhergestellt.")
+        confirm_recovery(bus, plan, observe, settle)
     return 0
+
+
+def confirm_recovery(bus: Bus, plan: Plan, observe: Callable[[Bus], list], settle: float,
+                     ) -> None:
+    """Nach dem Zuruecksetzen noch einmal nachsehen.
+
+    Die Messung unmittelbar nach dem Schreiben zeigt nur, dass die Register
+    wieder stimmen - nicht, dass die Anlage den Normalbetrieb schon
+    aufgenommen hat. Ein Wechselrichter braucht dafuer ein paar Sekunden, und
+    genau die entscheiden, ob man beruhigt weggehen kann.
+    """
+    if not plan.touched:
+        return
+    try:
+        time.sleep(settle)
+    except KeyboardInterrupt:
+        print("\n  Nachkontrolle abgebrochen - bitte mit 'read' selbst nachsehen.")
+        return
+    print(f"\n  Nachkontrolle nach {settle:.0f} s:")
+    table(observe(bus), width=38)
+    print("\n  Die Sollwerte sind zurueckgestellt. Zeigen die Messwerte oben noch")
+    print("  den Testzustand, mit 'read' weiter beobachten und notfalls 'reset'")
+    print("  ausfuehren.")
 
 
 def add_write_args(ap: argparse.ArgumentParser) -> None:

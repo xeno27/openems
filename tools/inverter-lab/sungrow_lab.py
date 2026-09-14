@@ -127,6 +127,11 @@ def observe(bus: Bus) -> list[tuple[str, object]]:
         ("EMS-Mode (13049)", d.get("EMS-Mode (13049)")),
         ("Befehl (13050)", d.get("Lade-/Entladebefehl (13050)")),
         ("Forced-Leistung [W] (13051)", d.get("Forced-Leistung [W] (13051)")),
+        # Die Grenzen gehoeren in die Tabelle: 'hold' wirkt ueber 33047 und
+        # laesst 13049-13051 absichtlich unveraendert. Ohne diese Zeilen sieht
+        # der Lauf aus, als haette der Befehl nichts getan.
+        ("Max. Laden [W] (33046)", d.get("Max. Ladeleistung [W] (33046)")),
+        ("Max. Entladen [W] (33047)", d.get("Max. Entladeleistung [W] (33047)")),
         ("Betriebszustand", d.get("Betriebszustand (12999)")),
     ]
 
