@@ -14,7 +14,8 @@ Ess (`Sungrow.SH.ESS`):
 - HybridEss
 - StartStoppable
 
-Charger (`Sungrow.SH.Charger`), one instance per MPPT port (a SH20T has three):
+Charger (`Sungrow.SH.Charger`), one instance per MPPT port (a SH20T and a SH25T
+have three each):
 
 - EssDcCharger
 
@@ -55,8 +56,21 @@ In every remote mode the Set-Point is applied as a command (Holding-Register
 13050: `0xAA` charge, `0xBB` discharge, `0xCC` stop) plus an unsigned power in
 [W] (Holding-Register 13051). The power refers to the battery, so
 `ApplyPowerHandler` subtracts the DC PV production from the AC Set-Point and
-clamps the result to the configured battery limits, which are additionally
-written to Holding-Registers 33046/33047.
+clamps the result to the effective battery limits.
+
+== Battery power limits
+
+Holding-Registers 33046 and 33047 are plant parameters, not Set-Points. On a
+measured SH25T they hold 30000 W for charge and 25000 W for discharge: the
+battery DC/DC converter is rated higher than the inverter, and the discharge
+limit matches the permitted grid connection. Writing them from an OpenEMS
+configuration would silently redefine a commissioning decision, so they are
+only read by default and `BatteryLimits` clamps every Set-Point to the smaller
+of the reported and the configured limit. Set 'Write battery power limits' if
+OpenEMS is meant to own them instead.
+
+Setting the discharge limit to its minimum of 1 (10 W) is the documented way to
+block discharge without leaving self-consumption mode.
 
 `External EMS` and `VPP` mode need a cyclic heartbeat (Holding-Register 13079);
 if it stops, the inverter returns to self-consumption mode on its own. The
@@ -89,6 +103,28 @@ Two pitfalls:
   with `wordOrder(LSWMSW)`.
 
 Register addresses are taken from the Sungrow 'Open Communication Protocol of
-Residential Hybrid Inverter' V1.1.9. The device type code of a SH20T is 0xE26.
+Residential Hybrid Inverter' V1.1.9. Device type codes (Input-Register 4999):
+0xE25 SH15T, 0xE26 SH20T, 0xE28 SH25T.
+
+== Verified in the field
+
+Measured on a SH25T (device type 0xE28, 25000 W nominal, 30000 W battery
+DC/DC) over Modbus TCP, with `tools/inverter-lab/sungrow_lab.py`:
+
+- Discharge lock: setting Holding-Register 33047 to 1 took the battery from
+  491 W to 0 within five seconds, and the grid meter picked up the 440 W house
+  load. Registers 13049 to 13051 stayed untouched throughout.
+- Forced discharge: `13049 = 2`, `13050 = 0xBB`, `13051 = 2000` held the
+  battery at 1999 W for a minute against the same house load, exporting the
+  difference; the running state reported 'Compulsory mode'. Two independent
+  runs agreed to within the meter resolution.
+- Handing control back (`13050 = 0xCC`, `13049 = 0`) returned the plant to
+  self-consumption within eight seconds. Note that the reading taken
+  immediately after the write still shows the forced power: the registers are
+  back before the plant is.
+
+Leaving 13051 at its last value has no effect while the mode is off, but
+whoever enables forced mode next inherits a live Set-Point, so
+`resetToSelfConsumption` clears it.
 
 https://github.com/OpenEMS/openems/tree/develop/io.openems.edge.sungrow[Source Code icon:github[]]

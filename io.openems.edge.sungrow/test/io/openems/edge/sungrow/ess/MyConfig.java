@@ -17,6 +17,7 @@ public class MyConfig extends AbstractComponentConfig implements Config {
 		private int capacity = 25_000;
 		private int maxApparentPower = 20_000;
 		private int maxBatteryChargePower = 20_000;
+		private boolean writeBatteryPowerLimits = false;
 		private int maxBatteryDischargePower = 20_000;
 		private int minSoc = 10;
 		private int maxSoc = 100;
@@ -57,6 +58,11 @@ public class MyConfig extends AbstractComponentConfig implements Config {
 
 		public Builder setMaxApparentPower(int maxApparentPower) {
 			this.maxApparentPower = maxApparentPower;
+			return this;
+		}
+
+		public Builder setWriteBatteryPowerLimits(boolean writeBatteryPowerLimits) {
+			this.writeBatteryPowerLimits = writeBatteryPowerLimits;
 			return this;
 		}
 
@@ -139,6 +145,11 @@ public class MyConfig extends AbstractComponentConfig implements Config {
 	@Override
 	public int maxApparentPower() {
 		return this.builder.maxApparentPower;
+	}
+
+	@Override
+	public boolean writeBatteryPowerLimits() {
+		return this.builder.writeBatteryPowerLimits;
 	}
 
 	@Override

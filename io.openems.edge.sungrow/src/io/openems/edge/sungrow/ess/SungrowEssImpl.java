@@ -63,6 +63,7 @@ import io.openems.edge.ess.power.api.Power;
 import io.openems.edge.sungrow.charger.SungrowCharger;
 import io.openems.edge.sungrow.common.AllowedPowerHandler;
 import io.openems.edge.sungrow.common.ApplyPowerHandler;
+import io.openems.edge.sungrow.common.BatteryLimits;
 import io.openems.edge.sungrow.common.BatteryPowerHandler;
 import io.openems.edge.sungrow.common.Sungrow;
 import io.openems.edge.sungrow.common.enums.ChargeDischargeCommand;
@@ -79,7 +80,7 @@ import io.openems.edge.timedata.api.utils.CalculateEnergyFromPower;
 
 /**
  * Implements the Sungrow SH series of three-phase hybrid inverters (e.g.
- * SH20T) as a fully controllable Energy Storage System.
+ * SH20T, SH25T) as a fully controllable Energy Storage System.
  *
  * <p>
  * Register addresses are the protocol addresses, i.e. the addresses of the
@@ -337,7 +338,10 @@ public class SungrowEssImpl extends AbstractOpenemsModbusComponent
 		var pvProduction = this.calculatePvProduction();
 		var result = ApplyPowerHandler.calculate(this.config.controlMode(), activePower, //
 				pvProduction == null ? 0 : pvProduction, //
-				this.config.maxBatteryChargePower(), this.config.maxBatteryDischargePower());
+				BatteryLimits.effective(this.getSetMaxChargingPower().get(), //
+						this.config.maxBatteryChargePower()), //
+				BatteryLimits.effective(this.getSetMaxDischargingPower().get(), //
+						this.config.maxBatteryDischargePower()));
 
 		this.getSetChargeDischargeCommandChannel().setNextWriteValue(result.command());
 		this.getSetChargeDischargePowerChannel().setNextWriteValue(result.power());
@@ -360,8 +364,10 @@ public class SungrowEssImpl extends AbstractOpenemsModbusComponent
 		if (this.config.controlMode() == ControlMode.INTERNAL) {
 			return;
 		}
-		setWriteValueIfNotRead(this.getSetMaxChargingPowerChannel(), this.config.maxBatteryChargePower());
-		setWriteValueIfNotRead(this.getSetMaxDischargingPowerChannel(), this.config.maxBatteryDischargePower());
+		if (this.config.writeBatteryPowerLimits()) {
+			setWriteValueIfNotRead(this.getSetMaxChargingPowerChannel(), this.config.maxBatteryChargePower());
+			setWriteValueIfNotRead(this.getSetMaxDischargingPowerChannel(), this.config.maxBatteryDischargePower());
+		}
 
 		if (emsMode.requiresHeartbeat()) {
 			// Written in every Cycle on purpose: this is the keep-alive of the session
@@ -378,6 +384,10 @@ public class SungrowEssImpl extends AbstractOpenemsModbusComponent
 	public void resetToSelfConsumption() throws OpenemsNamedException {
 		setWriteValueIfNotRead(this.getSetChargeDischargeCommandChannel(), ChargeDischargeCommand.STOP);
 		setWriteValueIfNotRead(this.getSetEmsModeChannel(), EmsMode.SELF_CONSUMPTION);
+		// The Set-Point has no effect while the mode is off, but whoever enables
+		// forced mode next would inherit a live one and the battery would act on it
+		// immediately.
+		setWriteValueIfNotRead(this.getSetChargeDischargePowerChannel(), 0);
 	}
 
 	/**

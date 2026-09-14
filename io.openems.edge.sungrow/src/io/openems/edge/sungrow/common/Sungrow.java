@@ -9,6 +9,7 @@ import io.openems.edge.common.channel.Channel;
 import io.openems.edge.common.channel.Doc;
 import io.openems.edge.common.channel.EnumWriteChannel;
 import io.openems.edge.common.channel.IntegerWriteChannel;
+import io.openems.edge.common.channel.value.Value;
 import io.openems.edge.common.component.OpenemsComponent;
 import io.openems.edge.sungrow.charger.SungrowCharger;
 import io.openems.edge.sungrow.common.enums.ChargeDischargeCommand;
@@ -186,6 +187,26 @@ public interface Sungrow extends OpenemsComponent {
 	 */
 	public default IntegerWriteChannel getSetMaxDischargingPowerChannel() {
 		return this.channel(ChannelId.SET_MAX_DISCHARGING_POWER);
+	}
+
+	/**
+	 * Gets the maximum charge power the inverter reports in Holding-Register
+	 * 33046, in [W]. See {@link ChannelId#SET_MAX_CHARGING_POWER}.
+	 *
+	 * @return the Channel {@link Value}
+	 */
+	public default Value<Integer> getSetMaxChargingPower() {
+		return this.getSetMaxChargingPowerChannel().value();
+	}
+
+	/**
+	 * Gets the maximum discharge power the inverter reports in Holding-Register
+	 * 33047, in [W]. See {@link ChannelId#SET_MAX_DISCHARGING_POWER}.
+	 *
+	 * @return the Channel {@link Value}
+	 */
+	public default Value<Integer> getSetMaxDischargingPower() {
+		return this.getSetMaxDischargingPowerChannel().value();
 	}
 
 	/**

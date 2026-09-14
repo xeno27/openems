@@ -30,14 +30,17 @@ import io.openems.edge.sungrow.common.enums.ControlMode;
 	@AttributeDefinition(name = "Capacity [Wh]", description = "Usable energy content of the battery.")
 	int capacity() default 25_000;
 
-	@AttributeDefinition(name = "Max apparent power [VA]", description = "Nominal apparent power of the inverter; 20000 for a SH20T.")
+	@AttributeDefinition(name = "Max apparent power [VA]", description = "Nominal apparent power of the inverter; 20000 for a SH20T, 25000 for a SH25T.")
 	int maxApparentPower() default 20_000;
 
-	@AttributeDefinition(name = "Max battery charge power [W]", description = "Maximum charge power of the battery; also written to Holding-Register 33046.")
+	@AttributeDefinition(name = "Max battery charge power [W]", description = "Upper limit for the charge Set-Point. The limit reported by the inverter in Holding-Register 33046 applies in addition; the smaller of the two wins.")
 	int maxBatteryChargePower() default 20_000;
 
-	@AttributeDefinition(name = "Max battery discharge power [W]", description = "Maximum discharge power of the battery; also written to Holding-Register 33047.")
+	@AttributeDefinition(name = "Max battery discharge power [W]", description = "Upper limit for the discharge Set-Point. The limit reported by the inverter in Holding-Register 33047 applies in addition; the smaller of the two wins.")
 	int maxBatteryDischargePower() default 20_000;
+
+	@AttributeDefinition(name = "Write battery power limits", description = "Write the two limits above to Holding-Registers 33046/33047. Off by default: these are plant parameters set at commissioning, and the discharge limit often reflects the permitted grid connection. Only switch this on if OpenEMS is meant to own them.")
+	boolean writeBatteryPowerLimits() default false;
 
 	@AttributeDefinition(name = "Minimum State-of-Charge [%]", description = "Below this State-of-Charge no discharge power is allowed.")
 	int minSoc() default 10;
